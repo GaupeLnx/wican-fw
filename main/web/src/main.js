@@ -6068,6 +6068,14 @@ function renderVehicleGroups(groupsData) {
                     dragHandle.style.cssText = "cursor:move; color:#94a3b8; font-size:1.1rem; margin-right:5px;";
                     pidHeaderLeft.appendChild(dragHandle);
 
+                    const isStd = (pid.pid_type === "std");
+                    if (isStd) {
+                        const stdBadge = document.createElement('span');
+                        stdBadge.innerText = "STD";
+                        stdBadge.style.cssText = "background:#3b82f6; color:white; font-size:0.6rem; padding:2px 4px; border-radius:4px; margin-right:5px; font-weight:bold;";
+                        pidHeaderLeft.appendChild(stdBadge);
+                    }
+		    
                     pidHeaderLeft.appendChild(document.createTextNode("PID: "));
                     const pidInput = document.createElement('input');
                     pidInput.value = pid.pid || '';
@@ -6187,6 +6195,14 @@ function renderVehicleGroups(groupsData) {
                             inp.style.width = "90%";
                             inp.style.border = "1px solid #e2e8f0";
                             inp.style.padding = "3px";
+                            
+                            // Visually lock fields that the Firmware calculates automatically
+                            if (isStd && (key === 'expression' || key === 'unit' || key === 'min' || key === 'max' || key === 'class')) {
+                                inp.disabled = true;
+                                inp.style.backgroundColor = "#f1f5f9";
+                                inp.title = "Auto-calculated by firmware";
+                            }
+                            
                             inp.onchange = (e) => { param[key] = e.target.value; };
                             return inp;
                         };
@@ -6587,4 +6603,214 @@ document.getElementById("defaultOpen").click();
     const type = document.getElementById("sta_ip_type")?.value;
     const rows = document.querySelectorAll(".sta-static-row");
     rows.forEach(r => r.style.display = (type === "static") ? "table-row" : "none");
+}
+
+
+// ==========================================================================
+//  CONVERT NON-GROUP PROFILE TO GROUPS
+// ==========================================================================
+function convertNonGroupProfile() {
+    const carModelValue = document.getElementById("car_model")?.value;
+    if (!carModelValue || carModelValue === 'Not Selected' || carModelValue === '') {
+        showNotification("Please select a vehicle profile first.", "red");
+        return;
+    }
+
+    // 1. Scrape current flat PIDs from the DOM (captures unsaved edits)
+    const specificPidEntries = document.querySelectorAll('.specific-pid-entry');
+    if (!specificPidEntries || specificPidEntries.length === 0) {
+        showNotification("No flat PIDs found in the 'Vehicle Specific' tab to convert.", "red");
+        return;
+    }
+
+    if (!confirm("This will organize your flat PIDs into the Groups tab based on their Init string and Period. Continue?")) {
+        return;
+    }
+
+    // 2. Make sure we have the active car object in memory
+    if (!latest_car_models) latest_car_models = { cars: [] };
+    if (!latest_car_models.cars) latest_car_models.cars = [];
+    let activeCar = latest_car_models.cars.find(c => c.car_model === carModelValue);
+    
+    if (!activeCar) {
+        activeCar = { car_model: carModelValue, pids: [], pid_groups: [] };
+        latest_car_models.cars.push(activeCar);
+    }
+
+    // 3. Sync existing groups so we append instead of overwriting them
+    if (typeof syncGroupsFromUIToMemory === 'function') {
+        syncGroupsFromUIToMemory();
+    }
+    if (!activeCar.pid_groups) activeCar.pid_groups = [];
+
+    // 4. Determine Global Init fallback
+    const globalInit = document.getElementById("specific_init")?.value || activeCar.init || "";
+
+    let groupsMap = {};
+    let groupCounter = activeCar.pid_groups.length + 1;
+
+    // 5. Iterate through the DOM entries and group them
+    specificPidEntries.forEach(entry => {
+        const pidName = entry.querySelector('.name-input')?.value || '';
+        const pidCmd = entry.querySelector('.pid-input')?.value || '';
+        const pidInit = entry.querySelector('.pid-init-input')?.value || '';
+        const enabled = entry.querySelector('.enabled-chk')?.checked !== false;
+        const expression = entry.querySelector('.expression-input')?.value || '';
+        const unit = entry.querySelector('.unit-input')?.value || '';
+        const cls = entry.querySelector('.class-input')?.value || '';
+        const periodStr = entry.querySelector('.period-input')?.value || '5000';
+        const minStr = entry.querySelector('.min-input')?.value || '';
+        const maxStr = entry.querySelector('.max-input')?.value || '';
+        const dType = entry.querySelector('.type-select')?.value || 'Default';
+        const sendTo = entry.querySelector('.send-to-input')?.value || '';
+
+        // Determine clustering key
+        let init = pidInit || globalInit;
+        let period = parseInt(periodStr) || 5000;
+        let key = init + "_" + period;
+
+        // Initialize the group if it doesn't exist
+        if (!groupsMap[key]) {
+            groupsMap[key] = {
+                group_name: "Group " + groupCounter++,
+                init: init,
+                period: period,
+                condition: "always",
+                enabled: true,
+                pids: []
+            };
+        }
+
+        // Add PID to the group (mapping flat to nested parameters)
+        groupsMap[key].pids.push({
+            pid: pidCmd,
+            pid_description: pidName, // Use the name as the UI description
+            enabled: enabled,
+            _collapsed: true,
+            parameters: [{
+                name: pidName,
+                expression: expression,
+                unit: unit,
+                class: cls,
+                min: minStr !== '' ? parseFloat(minStr) : '',
+                max: maxStr !== '' ? parseFloat(maxStr) : '',
+                destination_type: dType,
+                send_to: sendTo,
+                onchange: false,
+                enabled: enabled
+            }]
+        });
+    });
+
+    // 6. Append newly formed groups to the active car array
+    activeCar.pid_groups.push(...Object.values(groupsMap));
+    
+    // Explicitly update the global pointer so renderVehicleGroups sees the new groups
+    latest_car_models.pid_groups = activeCar.pid_groups;
+
+    // 7. Re-render the Groups UI 
+    renderVehicleGroups(activeCar.pid_groups);
+    enableAutoStoreButton();
+
+    showNotification("Profile converted! Review the new groups and click 'Store'.", "green");
+    
+    // Switch the UI focus back to the Groups Tab automatically
+    if (typeof openAutomateSubTab === 'function') {
+        const mockEvent = { currentTarget: document.querySelector('.automate-subtablinks[onclick*="automate_groups"]') };
+        openAutomateSubTab(mockEvent, 'automate_groups');
+    }
+}
+
+
+// ==========================================================================
+//  CONVERT STANDARD PIDS TO GROUPS
+// ==========================================================================
+function convertStandardProfile() {
+    const carModelValue = document.getElementById("car_model")?.value;
+    if (!carModelValue || carModelValue === 'Not Selected' || carModelValue === '') {
+        showNotification("Please select a vehicle profile first.", "red");
+        return;
+    }
+
+    const stdPidEntries = document.querySelectorAll('.std-pid-entry');
+    if (!stdPidEntries || stdPidEntries.length === 0) {
+        showNotification("No flat Standard PIDs found to convert.", "red");
+        return;
+    }
+
+    if (!confirm("This will organize your flat Standard PIDs into a new Group. Continue?")) {
+        return;
+    }
+
+    if (!latest_car_models) latest_car_models = { cars: [] };
+    if (!latest_car_models.cars) latest_car_models.cars = [];
+    let activeCar = latest_car_models.cars.find(c => c.car_model === carModelValue);
+    
+    if (!activeCar) {
+        activeCar = { car_model: carModelValue, pids: [], pid_groups: [] };
+        latest_car_models.cars.push(activeCar);
+    }
+
+    if (typeof syncGroupsFromUIToMemory === 'function') syncGroupsFromUIToMemory();
+    if (!activeCar.pid_groups) activeCar.pid_groups = [];
+
+    let groupsMap = {};
+
+    stdPidEntries.forEach(entry => {
+        const pidName = entry.querySelector('.name-input')?.value || '';
+        const enabled = entry.querySelector('.enabled-chk')?.checked !== false;
+        const periodStr = entry.querySelector('.period-input')?.value || '5000';
+        const dType = entry.querySelector('.type-select')?.value || 'Default';
+        const sendTo = entry.querySelector('.send-to-input')?.value || '';
+
+        let period = parseInt(periodStr) || 5000;
+        let key = "STD_" + period;
+
+        if (!groupsMap[key]) {
+            groupsMap[key] = {
+                group_name: "Standard PIDs - " + period + "ms",
+                init: "", // Uses global default
+                period: period,
+                condition: "always",
+                enabled: true,
+                pids: []
+            };
+        }
+
+        // Standard PIDs use Service 01 + the first 2 chars of the name (e.g., 0C)
+        let hexCmd = "01" + pidName.substring(0, 2); 
+
+        groupsMap[key].pids.push({
+            pid: hexCmd,
+            pid_description: pidName,
+            pid_type: "std", // <--- THE CRITICAL FLAG FOR C BACKEND
+            enabled: enabled,
+            _collapsed: true,
+            parameters: [{
+                name: pidName,
+                expression: "", // Left blank intentionally
+                unit: "",
+                class: "",
+                min: "",
+                max: "",
+                destination_type: dType,
+                send_to: sendTo,
+                onchange: false,
+                enabled: enabled
+            }]
+        });
+    });
+
+    activeCar.pid_groups.push(...Object.values(groupsMap));
+    latest_car_models.pid_groups = activeCar.pid_groups;
+
+    renderVehicleGroups(activeCar.pid_groups);
+    enableAutoStoreButton();
+
+    showNotification("Standard PIDs converted! Review the new groups and click 'Store'.", "green");
+    
+    if (typeof openAutomateSubTab === 'function') {
+        const mockEvent = { currentTarget: document.querySelector('.automate-subtablinks[onclick*="automate_groups"]') };
+        openAutomateSubTab(mockEvent, 'automate_groups');
+    }
 }

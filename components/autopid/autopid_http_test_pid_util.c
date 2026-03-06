@@ -88,13 +88,16 @@ static void test_pid_capture_cb(char *str, uint32_t len, QueueHandle_t *q, char 
 
 static void test_pid_elm_cb(char *str, uint32_t len, QueueHandle_t *q, char *cmd_str)
 {
-    // Capture raw bytes for the command (optional)
+    // Capture raw bytes for the command
     test_pid_capture_cb(str, len, q, cmd_str);
 
-    // Signal that the command has completed (uart1_event_task only calls the
-    // response callback after it sees the terminator/prompt).
-    if (test_pid_cmd_done)
-        xSemaphoreGive(test_pid_cmd_done);
+    // Only signal completion when the ELM327 prompt '>' is received.
+    // Multi-frame ISO-TP responses arrive in multiple UART chunks.
+    if (str != NULL && strchr(str, '>') != NULL)
+    {
+        if (test_pid_cmd_done)
+            xSemaphoreGive(test_pid_cmd_done);
+    }
 }
 
 bool autopid_test_pid_raw_ensure(size_t cap)

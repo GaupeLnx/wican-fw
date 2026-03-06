@@ -416,10 +416,17 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
 
         const char *raw = autopid_test_pid_raw_get();
         
+        // Duplicate raw string because parse_elm327_response uses strtok and mutates it,
+        // which would otherwise truncate the JSON 'raw' snippet sent back to the UI.
+        char *raw_copy = (char *)malloc(strlen(raw) + 1);
+        if (raw_copy) strcpy(raw_copy, raw);
+
         // Pass the raw string through the exact same parser the MQTT background task uses
         response_t parsed_elm_response;
         memset(&parsed_elm_response, 0, sizeof(parsed_elm_response));
-        parse_elm327_response((char*)raw, &parsed_elm_response);
+        parse_elm327_response(raw_copy ? raw_copy : (char*)raw, &parsed_elm_response);
+        
+        if (raw_copy) free(raw_copy);
 
         // Determine which data buffer has the clean payload
         uint8_t *clean_data = parsed_elm_response.data;
@@ -549,11 +556,18 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
             heap_caps_free(n_row_init);
 
         const char *raw = autopid_test_pid_raw_get();
+        
+        // Duplicate raw string because parse_elm327_response uses strtok and mutates it,
+        // which would otherwise truncate the JSON 'raw' snippet sent back to the UI.
+        char *raw_copy = (char *)malloc(strlen(raw) + 1);
+        if (raw_copy) strcpy(raw_copy, raw);
 
         // Pass the raw string through the exact same parser the MQTT background task uses
         response_t parsed_elm_response;
         memset(&parsed_elm_response, 0, sizeof(parsed_elm_response));
-        parse_elm327_response((char*)raw, &parsed_elm_response);
+        parse_elm327_response(raw_copy ? raw_copy : (char*)raw, &parsed_elm_response);
+        
+        if (raw_copy) free(raw_copy);
 
         // Determine which data buffer has the clean payload
         uint8_t *clean_data = parsed_elm_response.data;

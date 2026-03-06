@@ -1604,7 +1604,15 @@
                     These are loaded from the selected Vehicle Profile.
                 </div>
                 <div id="vehicle_groups_container"></div>
-            </div>
+                
+                <div class="divider"></div>
+                <div class="button-group" style="flex-wrap: wrap;">
+                    <button type="button" id="convert_profile_btn" onclick="convertNonGroupProfile()" class="primary-button success-button">Copy Custom PIDs</button>
+                    <button type="button" id="convert_std_btn" onclick="convertStandardProfile()" class="primary-button success-button" style="background-color: #3b82f6 !important; border-color: #2563eb !important;">Copy Standard PIDs</button>
+                </div>
+                <div style="font-size:0.75rem; color:#555; margin-top:0.5rem;">
+                    Migrate your flat configurations into the Groups tab. Standard PIDs will be placed in a dedicated group.
+                </div>
 
             <div id="automate_custom" class="automate-subtabcontent">
 

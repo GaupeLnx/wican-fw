@@ -248,7 +248,15 @@ static void parse_parameter_object(parameter_t *out_param, const cJSON *param_ob
         else curr_pid->period = cfg->cycle;
 
         curr_pid->rxheader = (rxheader_item && rxheader_item->valuestring) ? strdup_psram(rxheader_item->valuestring) : NULL;
-        curr_pid->pid_type = type;
+        
+        // Check for specific pid_type flag injected by the UI
+        cJSON *type_item_flag = cJSON_GetObjectItem(pid, "pid_type");
+        if (type_item_flag && type_item_flag->valuestring && strcmp(type_item_flag->valuestring, "std") == 0) {
+            curr_pid->pid_type = PID_STD;
+        } else {
+            curr_pid->pid_type = type; // Fallback to whatever the caller requested
+        }
+
         curr_pid->enabled = (enabled_item && cJSON_IsBool(enabled_item)) ? cJSON_IsTrue(enabled_item) : true;
 
         // [CRITICAL FIX] Support Nested "parameters" Array
