@@ -633,17 +633,22 @@ static void autopid_data_update(autopid_config_t *pids)
                     {
                         continue;
                     }
-                    if (param->name && param->value != FLT_MAX)
+
+                    // Replace the existing name/value check with this:
+                    if (param->name)
                     {
-                        if (param->sensor_type == BINARY_SENSOR)
-                        {
-                            cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                        // ---> ADD RAW STRING JSON LOGIC <---
+                        if (param->raw_string_value != NULL) {
+                            cJSON_AddStringToObject(root, param->name, param->raw_string_value);
                         }
-                        else
-                        {
-                            cJSON_AddNumberToObject(root, param->name, param->value);
+                        else if (param->value != FLT_MAX) {
+                            if (param->sensor_type == BINARY_SENSOR) {
+                                cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                            } else {
+                                cJSON_AddNumberToObject(root, param->name, param->value);
+                            }
                         }
-                    }
+                    }		       
                 }
             }
 
@@ -658,15 +663,20 @@ static void autopid_data_update(autopid_config_t *pids)
                     {
                         continue;
                     }
-                    if (param->name && param->value != FLT_MAX)
+
+                    // Replace the existing name/value check with this:
+                    if (param->name)
                     {
-                        if (param->sensor_type == BINARY_SENSOR)
-                        {
-                            cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                        // ---> ADD RAW STRING JSON LOGIC <---
+                        if (param->raw_string_value != NULL) {
+                            cJSON_AddStringToObject(root, param->name, param->raw_string_value);
                         }
-                        else
-                        {
-                            cJSON_AddNumberToObject(root, param->name, param->value);
+                        else if (param->value != FLT_MAX) {
+                            if (param->sensor_type == BINARY_SENSOR) {
+                                cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                            } else {
+                                cJSON_AddNumberToObject(root, param->name, param->value);
+                            }
                         }
                     }
                 }
@@ -2902,19 +2912,61 @@ static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
 
                     // 1. Custom / Specific PID Logic
                     if (curr_pid->pid_type == PID_CUSTOM || curr_pid->pid_type == PID_SPECIFIC) {
-                        if (param->expression && evaluate_expression((uint8_t *)param->expression, elm327_response.data, 0, &result)) {
-                            if (param->min != FLT_MAX && result < param->min) {
-                                ESP_LOGW(TAG, "Param %s val %.2f < min %.2f", param->name, result, param->min);
-                            } else if (param->max != FLT_MAX && result > param->max) {
-                                ESP_LOGW(TAG, "Param %s val %.2f > max %.2f", param->name, result, param->max);
-                            } else {
-                                result = round(result * 100.0) / 100.0;
-                                param->value = result;
+
+                      if (param->expression && strcasecmp(param->expression, "RAW") == 0) {
+                        
+                        uint8_t *data = elm327_response.data;
+                        uint32_t data_len = elm327_response.length;
+                        
+                        if (data_len > 0) {
+                            uint8_t total_dtcs = 0;
+                            uint8_t dtc_buffer[128]; // Buffer to hold up to 64 combined codes
+                            int dtc_idx = 0;
+
+                            // Scan the raw CAN bytes from all responding ECUs
+                            for (uint32_t i = 0; i < data_len; i++) {
+                                
+                                // Find the Mode 03 response header (0x43)
+                                if (data[i] == 0x43 && (i + 1) < data_len) {
+                                    uint8_t count = data[i+1];
+                                    total_dtcs += count;
+                                    
+                                    int dtc_bytes = count * 2; // 2 bytes per code
+                                    
+                                    // Safety check to prevent buffer overflow
+                                    if ((i + 1 + dtc_bytes < data_len) && (dtc_idx + dtc_bytes < sizeof(dtc_buffer))) {
+                                        // Copy the DTC bytes into our master buffer
+                                        for (int j = 0; j < dtc_bytes; j++) {
+                                            dtc_buffer[dtc_idx++] = data[i + 2 + j];
+                                        }
+                                        // Skip the index past these codes so we don't accidentally 
+                                        // mistake a DTC byte for a new 0x43 header
+                                        i += 1 + dtc_bytes; 
+                                    }
+                                }
+                            }
+
+                            if (param->raw_string_value) free(param->raw_string_value);
+                            
+                            // Allocate memory: 4 chars for "43" and "XX" (count), + 2 chars per DTC byte, + 1 null terminator
+                            param->raw_string_value = heap_caps_malloc(4 + (dtc_idx * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+                            
+                            if (param->raw_string_value) {
+                                // Write the master header and the combined total count
+                                sprintf(param->raw_string_value, "43%02X", total_dtcs);
+                                
+                                // Append all the collected codes from all ECUs
+                                for (int b = 0; b < dtc_idx; b++) {
+                                    sprintf(&param->raw_string_value[4 + (b * 2)], "%02X", dtc_buffer[b]);
+                                }
+                                
+                                param->failed = false;
                                 autopid_config->last_successful_pid_time = time(NULL);
                                 publish_parameter_mqtt(param);
-                            }
-                        }
-                    } 
+			    }
+			}
+		      }
+                    }
                     // 2. Standard PID Logic
                     else if (curr_pid->pid_type == PID_STD) {
                         const std_pid_t *pid_info = get_pid_from_string(param->name);
@@ -3028,18 +3080,29 @@ static void publish_parameter_mqtt(parameter_t *param)
     if (!param)
         return;
 
-// Filter: If "onchange" is set, only proceed if value changed
+    // Filter: If "onchange" is set, only proceed if value changed
     if (param->onchange)
     {
-        // Compare with simple float tolerance or direct equality
-        if (param->value == param->last_sent_value)
-        {
-            return; // SKIP PUBLISH
+        // ---> ADD STRING ONCHANGE LOGIC <---
+        if (param->raw_string_value != NULL) {
+            if (param->last_sent_raw_string && strcmp(param->raw_string_value, param->last_sent_raw_string) == 0) {
+                return; // SKIP PUBLISH
+            }
+        } else {
+            if (param->value == param->last_sent_value) {
+                return; // SKIP PUBLISH
+            }
         }
     }
     
     // Update history only if we are about to send
     param->last_sent_value = param->value;
+    
+    // ---> ADD STRING HISTORY UPDATE <---
+    if (param->raw_string_value != NULL) {
+        if (param->last_sent_raw_string) free(param->last_sent_raw_string);
+        param->last_sent_raw_string = strdup_psram(param->raw_string_value);
+    }
     
     char *payload = NULL;
     
@@ -3051,12 +3114,13 @@ static void publish_parameter_mqtt(parameter_t *param)
             cJSON *param_json = cJSON_CreateObject();
             if (param_json)
             {
-                if (param->sensor_type == BINARY_SENSOR)
-                {
-                    cJSON_AddStringToObject(param_json, param->name, param->value > 0 ? "on" : "off");
+                // ---> ADD STRING PAYLOAD LOGIC <---
+                if (param->raw_string_value != NULL) {
+                    cJSON_AddStringToObject(param_json, param->name, param->raw_string_value);
                 }
-                else
-                {
+                else if (param->sensor_type == BINARY_SENSOR) {
+                    cJSON_AddStringToObject(param_json, param->name, param->value > 0 ? "on" : "off");
+                } else {
                     cJSON_AddNumberToObject(param_json, param->name, param->value);
                 }
                 limitJsonDecimalPrecision(param_json);
@@ -3067,9 +3131,14 @@ static void publish_parameter_mqtt(parameter_t *param)
         break;
 
     case DEST_MQTT_WALLBOX:
-        // Simple value format
-        asprintf(&payload, "%.2f", param->value);
+        // ---> ADD WALLBOX STRING LOGIC <---
+        if (param->raw_string_value != NULL) {
+            asprintf(&payload, "%s", param->raw_string_value);
+        } else {
+            asprintf(&payload, "%.2f", param->value);
+        }
         break;
+
     default:
         break;
     }

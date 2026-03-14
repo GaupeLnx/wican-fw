@@ -86,6 +86,9 @@ typedef struct
     // [NEW] Update on Change Support
     char *update_mode;       // "always" or "onchange"
     float last_sent_value;   // Tracks previous value
+
+    char *raw_string_value;      
+    char *last_sent_raw_string;  
 } parameter_t;
 
 typedef struct 

@@ -5574,13 +5574,23 @@ async function testGroup(gIndex) {
                         try {
                             await new Promise(r => setTimeout(r, 200)); 
 
-                            const payload = { 
-                                kind: 'vehicle',
-                                pid: pidData.pid,
-                                pid_init: "", 
-                                expr: param.expression || "A", 
-                                init: initString
-                            };
+                            let payload;
+                            // Check the flag we injected during the migration!
+                            if (pidData.pid_type === 'std') {
+                                payload = {
+                                    kind: 'std',
+                                    name: param.name, // The backend needs the full name (e.g., "0C-Engine RPM")
+                                    protocol: document.getElementById('ecu_protocol')?.value || '0'
+                                };
+                            } else {
+                                payload = { 
+                                    kind: 'vehicle',
+                                    pid: pidData.pid,
+                                    pid_init: "", 
+                                    expr: param.expression || "A", 
+                                    init: initString
+                                };
+                            }
 
                             const res = await fetch('/autopid/test_pid', {
                                 method: 'POST',
