@@ -619,59 +619,90 @@ static void autopid_data_update(autopid_config_t *pids)
         cJSON *root = cJSON_CreateObject();
         if (root)
         {
-            for (uint32_t i = 0; i < pids->pid_count; i++)
-            {
-                pid_data_t *curr_pid = &pids->pids[i];
-                if (!curr_pid->enabled)
-                {
-                    continue;
-                }
-                for (uint32_t j = 0; j < curr_pid->parameters_count; j++)
-                {
-                    parameter_t *param = &curr_pid->parameters[j];
-                    if (!param->enabled)
-                    {
-                        continue;
-                    }
 
-                    // Replace the existing name/value check with this:
-                    if (param->name)
-                    {
-                        // ---> ADD RAW STRING JSON LOGIC <---
-                        if (param->raw_string_value != NULL) {
-                            cJSON_AddStringToObject(root, param->name, param->raw_string_value);
-                        }
-                        else if (param->value != FLT_MAX) {
-                            if (param->sensor_type == BINARY_SENSOR) {
-                                cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
-                            } else {
-                                cJSON_AddNumberToObject(root, param->name, param->value);
+            // 1. PIDs (Group-Aware Logic)
+            if (pids->use_groups) {
+                for (uint32_t g = 0; g < pids->group_count; g++) {
+
+		  pid_group_t *grp = &pids->groups[g];
+                    if (!grp->enabled) continue;
+                    for (uint32_t i = 0; i < grp->pid_count; i++) {
+                        pid_data_t *curr_pid = grp->pids[i];
+                        if (!curr_pid || !curr_pid->enabled) continue;
+                        for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                            parameter_t *param = &curr_pid->parameters[j];
+                            if (!param->enabled) continue;
+
+                            if (param->name) {
+                                if (param->raw_string_value != NULL) {
+                                    cJSON_AddStringToObject(root, param->name, param->raw_string_value);
+                                } else if (param->value != FLT_MAX) {
+                                    if (param->sensor_type == BINARY_SENSOR) {
+                                        cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                                    } else {
+                                        cJSON_AddNumberToObject(root, param->name, param->value);
+                                    }
+                                }
                             }
                         }
-                    }		       
+                    }
+               }
+
+	    } 
+            
+            if (pids->pid_count > 0) {
+                // Legacy Flat List Logic
+                for (uint32_t i = 0; i < pids->pid_count; i++) {
+                    pid_data_t *curr_pid = &pids->pids[i];
+
+                    bool is_in_group = false;
+                    if (pids->use_groups) {
+                        for (uint32_t g = 0; g < pids->group_count; g++) {
+                            for (uint32_t gp = 0; gp < pids->groups[g].pid_count; gp++) {
+                                if (pids->groups[g].pids[gp] == curr_pid) {
+                                    is_in_group = true; break;
+                                }
+                            }
+                            if (is_in_group) break;
+                        }
+                    }
+                    if (is_in_group) continue; // Let the Group logic handle this one!
+                    // -------------------------------
+
+                    if (!curr_pid->enabled) continue;
+                    for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                        parameter_t *param = &curr_pid->parameters[j];
+                        if (!param->enabled) continue;
+
+                        if (param->name) {
+                            if (param->raw_string_value != NULL) {
+                                cJSON_AddStringToObject(root, param->name, param->raw_string_value);
+                            } else if (param->value != FLT_MAX) {
+                                if (param->sensor_type == BINARY_SENSOR) {
+                                    cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                                } else {
+                                    cJSON_AddNumberToObject(root, param->name, param->value);
+                                }
+                            }
+                        }		       
+                    }
                 }
             }
 
-            // Add CAN-filter (broadcast) parameters
+            // 2. Add CAN-filter (broadcast) parameters
             for (uint32_t fi = 0; fi < pids->can_filters_count; fi++)
             {
                 can_filter_t *f = &pids->can_filters[fi];
                 for (uint32_t pi = 0; pi < f->parameters_count; pi++)
                 {
                     parameter_t *param = &f->parameters[pi];
-                    if (!param->enabled)
-                    {
-                        continue;
-                    }
+                    if (!param->enabled) continue;
 
-                    // Replace the existing name/value check with this:
                     if (param->name)
                     {
-                        // ---> ADD RAW STRING JSON LOGIC <---
                         if (param->raw_string_value != NULL) {
                             cJSON_AddStringToObject(root, param->name, param->raw_string_value);
-                        }
-                        else if (param->value != FLT_MAX) {
+                        } else if (param->value != FLT_MAX) {
                             if (param->sensor_type == BINARY_SENSOR) {
                                 cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
                             } else {
@@ -685,6 +716,7 @@ static void autopid_data_update(autopid_config_t *pids)
             autopid_data.json_str = cJSON_PrintUnformatted(root);
             cJSON_Delete(root);
         }
+	  
 
         // release mutex
         xSemaphoreGive(autopid_data.mutex);
@@ -781,42 +813,92 @@ void autopid_data_publish(void)
         cJSON *root = cJSON_CreateObject();
         if (root)
         {
-            for (uint32_t i = 0; i < autopid_config->pid_count; i++)
-            {
-                pid_data_t *curr_pid = &autopid_config->pids[i];
-                for (uint32_t j = 0; j < curr_pid->parameters_count; j++)
-                {
-                    parameter_t *param = &curr_pid->parameters[j];
-                    if (param->name && param->value != FLT_MAX)
-                    {
-                        if (param->sensor_type == BINARY_SENSOR)
-                        {
-                            cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+            // 1. PIDs (Group-Aware Logic)
+            if (autopid_config->use_groups) {
+                for (uint32_t g = 0; g < autopid_config->group_count; g++) {
+                    pid_group_t *grp = &autopid_config->groups[g];
+                    if (!grp->enabled) continue;
+                    for (uint32_t i = 0; i < grp->pid_count; i++) {
+                        pid_data_t *curr_pid = grp->pids[i];
+                        if (!curr_pid || !curr_pid->enabled) continue;
+                        for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                            parameter_t *param = &curr_pid->parameters[j];
+                            if (!param->enabled) continue;
+
+                            if (param->name) {
+                                if (param->raw_string_value != NULL) {
+                                    cJSON_AddStringToObject(root, param->name, param->raw_string_value);
+                                } else if (param->value != FLT_MAX) {
+                                    if (param->sensor_type == BINARY_SENSOR) {
+                                        cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                                    } else {
+                                        cJSON_AddNumberToObject(root, param->name, param->value);
+                                    }
+                                }
+                            }
                         }
-                        else
-                        {
-                            cJSON_AddNumberToObject(root, param->name, param->value);
+                    }
+               }
+            } 
+
+            // Legacy Flat List Logic
+            if (autopid_config->pid_count > 0) {
+                for (uint32_t i = 0; i < autopid_config->pid_count; i++) {
+                    pid_data_t *curr_pid = &autopid_config->pids[i];
+
+                    // ---> ADD THIS FILTER BLOCK <---
+                    bool is_in_group = false;
+                    if (autopid_config->use_groups) {
+                        for (uint32_t g = 0; g < autopid_config->group_count; g++) {
+                            for (uint32_t gp = 0; gp < autopid_config->groups[g].pid_count; gp++) {
+                                if (autopid_config->groups[g].pids[gp] == curr_pid) {
+                                    is_in_group = true; break;
+                                }
+                            }
+                            if (is_in_group) break;
+                        }
+                    }
+                    if (is_in_group) continue; // Let the Group logic handle this one!
+                    // -------------------------------
+		    
+                    if (!curr_pid->enabled) continue;
+                    for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                        parameter_t *param = &curr_pid->parameters[j];
+                        if (!param->enabled) continue;
+
+                        if (param->name) {
+                            if (param->raw_string_value != NULL) {
+                                cJSON_AddStringToObject(root, param->name, param->raw_string_value);
+                            } else if (param->value != FLT_MAX) {
+                                if (param->sensor_type == BINARY_SENSOR) {
+                                    cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                                } else {
+                                    cJSON_AddNumberToObject(root, param->name, param->value);
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Add CAN-filter (broadcast) parameters
+            // 2. Add CAN-filter (broadcast) parameters
             for (uint32_t fi = 0; fi < autopid_config->can_filters_count; fi++)
             {
                 can_filter_t *f = &autopid_config->can_filters[fi];
                 for (uint32_t pi = 0; pi < f->parameters_count; pi++)
                 {
                     parameter_t *param = &f->parameters[pi];
-                    if (param->name && param->value != FLT_MAX)
-                    {
-                        if (param->sensor_type == BINARY_SENSOR)
-                        {
-                            cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
-                        }
-                        else
-                        {
-                            cJSON_AddNumberToObject(root, param->name, param->value);
+                    if (!param->enabled) continue;
+
+                    if (param->name) {
+                        if (param->raw_string_value != NULL) {
+                            cJSON_AddStringToObject(root, param->name, param->raw_string_value);
+                        } else if (param->value != FLT_MAX) {
+                            if (param->sensor_type == BINARY_SENSOR) {
+                                cJSON_AddStringToObject(root, param->name, param->value > 0 ? "on" : "off");
+                            } else {
+                                cJSON_AddNumberToObject(root, param->name, param->value);
+                            }
                         }
                     }
                 }
@@ -2868,13 +2950,6 @@ static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
     
     // Command Processing
     if (curr_pid->cmd != NULL && strlen(curr_pid->cmd) > 0) {
-        
-        // Handle Inits for Custom/Specific (Legacy path only)
-        if (!autopid_config->use_groups && (curr_pid->pid_type == PID_CUSTOM || curr_pid->pid_type == PID_SPECIFIC)) {
-            if (curr_pid->init != NULL && strlen(curr_pid->init) > 0) {
-                send_commands(curr_pid->init, 2);
-            }
-        }
 
         ESP_LOGI(TAG, "Executing command: %s", curr_pid->cmd);
 
@@ -2894,7 +2969,7 @@ static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
             xSemaphoreGive(autopid_config->mutex);
 
             /* 2. Wait for the car (this takes 15ms - 50ms) */
-            BaseType_t got_response = xQueueReceive(autopidQueue, &elm327_response, pdMS_TO_TICKS(12000));
+            BaseType_t got_response = xQueueReceive(autopidQueue, &elm327_response, pdMS_TO_TICKS(1000));
 
             /* 3. Instantly re-take the lock before we process or modify any data */
             xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
@@ -2911,61 +2986,78 @@ static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
                     xEventGroupSetBits(xautopid_event_group, ECU_CONNECTED_BIT);
 
                     // 1. Custom / Specific PID Logic
+
                     if (curr_pid->pid_type == PID_CUSTOM || curr_pid->pid_type == PID_SPECIFIC) {
 
-                      if (param->expression && strcasecmp(param->expression, "RAW") == 0) {
-                        
-                        uint8_t *data = elm327_response.data;
-                        uint32_t data_len = elm327_response.length;
-                        
-                        if (data_len > 0) {
-                            uint8_t total_dtcs = 0;
-                            uint8_t dtc_buffer[128]; // Buffer to hold up to 64 combined codes
-                            int dtc_idx = 0;
+                        if (param->expression && strcasecmp(param->expression, "RAW") == 0) {
+                            
+                            uint8_t *data = elm327_response.data;
+                            uint32_t data_len = elm327_response.length;
+                            
+                            if (data_len > 0) {
+                                uint8_t total_dtcs = 0;
+                                uint8_t dtc_buffer[128]; // Buffer to hold up to 64 combined codes
+                                int dtc_idx = 0;
 
-                            // Scan the raw CAN bytes from all responding ECUs
-                            for (uint32_t i = 0; i < data_len; i++) {
-                                
-                                // Find the Mode 03 response header (0x43)
-                                if (data[i] == 0x43 && (i + 1) < data_len) {
-                                    uint8_t count = data[i+1];
-                                    total_dtcs += count;
+                                // Scan the raw CAN bytes from all responding ECUs
+                                for (uint32_t i = 0; i < data_len; i++) {
                                     
-                                    int dtc_bytes = count * 2; // 2 bytes per code
-                                    
-                                    // Safety check to prevent buffer overflow
-                                    if ((i + 1 + dtc_bytes < data_len) && (dtc_idx + dtc_bytes < sizeof(dtc_buffer))) {
-                                        // Copy the DTC bytes into our master buffer
-                                        for (int j = 0; j < dtc_bytes; j++) {
-                                            dtc_buffer[dtc_idx++] = data[i + 2 + j];
+                                    // Find the Mode 03 response header (0x43)
+                                    if (data[i] == 0x43 && (i + 1) < data_len) {
+                                        uint8_t count = data[i+1];
+                                        total_dtcs += count;
+                                        
+                                        int dtc_bytes = count * 2; // 2 bytes per code
+                                        
+                                        // Safety check to prevent buffer overflow
+                                        if ((i + 1 + dtc_bytes < data_len) && (dtc_idx + dtc_bytes < sizeof(dtc_buffer))) {
+                                            // Copy the DTC bytes into our master buffer
+                                            for (int j = 0; j < dtc_bytes; j++) {
+                                                dtc_buffer[dtc_idx++] = data[i + 2 + j];
+                                            }
+                                            // Skip the index past these codes so we don't accidentally 
+                                            // mistake a DTC byte for a new 0x43 header
+                                            i += 1 + dtc_bytes; 
                                         }
-                                        // Skip the index past these codes so we don't accidentally 
-                                        // mistake a DTC byte for a new 0x43 header
-                                        i += 1 + dtc_bytes; 
                                     }
                                 }
-                            }
 
-                            if (param->raw_string_value) free(param->raw_string_value);
-                            
-                            // Allocate memory: 4 chars for "43" and "XX" (count), + 2 chars per DTC byte, + 1 null terminator
-                            param->raw_string_value = heap_caps_malloc(4 + (dtc_idx * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-                            
-                            if (param->raw_string_value) {
-                                // Write the master header and the combined total count
-                                sprintf(param->raw_string_value, "43%02X", total_dtcs);
+                                if (param->raw_string_value) free(param->raw_string_value);
                                 
-                                // Append all the collected codes from all ECUs
-                                for (int b = 0; b < dtc_idx; b++) {
-                                    sprintf(&param->raw_string_value[4 + (b * 2)], "%02X", dtc_buffer[b]);
+                                // Allocate memory: 4 chars for "43" and "XX" (count), + 2 chars per DTC byte, + 1 null terminator
+                                param->raw_string_value = heap_caps_malloc(4 + (dtc_idx * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+                                
+                                if (param->raw_string_value) {
+                                    // Write the master header and the combined total count
+                                    sprintf(param->raw_string_value, "43%02X", total_dtcs);
+                                    
+                                    // Append all the collected codes from all ECUs
+                                    for (int b = 0; b < dtc_idx; b++) {
+                                        sprintf(&param->raw_string_value[4 + (b * 2)], "%02X", dtc_buffer[b]);
+                                    }
+                                    
+                                    param->failed = false;
+                                    autopid_config->last_successful_pid_time = time(NULL);
+                                    publish_parameter_mqtt(param);
                                 }
-                                
-                                param->failed = false;
-                                autopid_config->last_successful_pid_time = time(NULL);
-                                publish_parameter_mqtt(param);
-			    }
-			}
-		      }
+                            }
+                        } else {
+                            // ---> NORMAL MATH EVALUATION LOGIC <---
+                            if (evaluate_expression((uint8_t *)param->expression, (uint8_t *)elm327_response.data, 0, &result)) {
+                                if (param->min != FLT_MAX && result < param->min) {
+                                    // Out of bounds, skip
+                                } else if (param->max != FLT_MAX && result > param->max) {
+                                    // Out of bounds, skip
+                                } else {
+                                    param->value = (float)(round(result * 100.0) / 100.0);
+                                    autopid_config->last_successful_pid_time = time(NULL);
+                                    publish_parameter_mqtt(param);
+                                }
+                            } else {
+                                param->failed = true;
+                                ESP_LOGE(TAG, "Expression eval failed for %s", param->name);
+                            }
+                        }
                     }
                     // 2. Standard PID Logic
                     else if (curr_pid->pid_type == PID_STD) {
@@ -3887,68 +3979,43 @@ static void autopid_task(void *pvParameters)
             // [NEW] GROUP MODE LOGIC (SYNCHRONIZED)
             // ==========================================================================================
             if (autopid_config->use_groups) {
-
                 for (uint32_t g = 0; g < autopid_config->group_count; g++) {
                     pid_group_t *group = &autopid_config->groups[g];
-
-                    // Skip if the group is disabled ---
                     if (!group->enabled) continue;		
                     
-                    // 1. Check Condition (Voltage / RPM)
                     bool active = true;
                     if (group->detection_method == DETECTION_VOLTAGE) {
                         active = dev_status_is_wake_voltage_ok();
                     } else if (group->detection_method == DETECTION_ADAPTIVE_RPM) {
                         active = is_engine_running();
-                    }
-                    /* [NEW] Add MQTT Condition Check with Watchdog */
-                    else if (group->detection_method == DETECTION_MQTT) {
+                    } else if (group->detection_method == DETECTION_MQTT) {
                        if (group->mqtt_active_flag) {
-                           // Check if the 15-minute watchdog has expired
                            if (wc_timer_is_expired(&group->mqtt_active_timer)) {
-                               ESP_LOGW(TAG, "Group '%s' reached 15-min MQTT timeout. Auto-disabling.", group->name);
-                               group->mqtt_active_flag = false; // Turn it off safely
+                               group->mqtt_active_flag = false;
                                active = false;
-                           } else {
-                               active = true; // Timer is still good, execute PIDs!
-                           }
-                       } else {
-                           active = false;
-                       }
-                   }	    
+                           } else { active = true; }
+                       } else { active = false; }
+                    }	    
 
                     if (!active) continue;
 
-                    // 2. Check Timing (Synchronized Batch Trigger)
                     bool run_batch = false;
                     if (group->period > 0) {
-                        // If group has a period, use the MASTER GROUP TIMER
                         if (wc_timer_is_expired(&group->timer)) {
                             run_batch = true;
-                            wc_timer_set(&group->timer, group->period); // Set next wake up immediately to maintain cadence
+                            /* RESTORED: Reset timer at the START of the batch */
+                            wc_timer_set(&group->timer, group->period); 
                         }
-                    } else {
-                        // If period is 0 (or undefined), treat as continuous/individual checks
-                        run_batch = true; 
-                    }
+                    } else { run_batch = true; }
+		    
+                    if (!run_batch) continue;
 
-                    if (!run_batch) continue; // Skip this group if it's not time yet
-
-                    // 3. Check Init String (Protocol Switching)
                     if (group->init && strlen(group->init) > 0) {
-                        bool need_init = false;
-                        if (current_active_init == NULL || strcmp(current_active_init, group->init) != 0) {
-                            need_init = true;
-                        }
-                        
-                        if (need_init) {
-                            ESP_LOGI(TAG, "Group '%s' Active - Switching Init: %s", group->name, group->init);
-                            send_commands(group->init, 5);
-                            current_active_init = group->init; 
-                        }
+                        /* RESTORED: Simple init send without flush loops */
+                        send_commands(group->init, 5);
+                        current_active_init = group->init;
                     }
 
-                    // 4. Iterate PIDs in Group (Batch Execution)
                     for (uint32_t i = 0; i < group->pid_count; i++) {
                         pid_data_t *curr_pid = group->pids[i];
                         if (!curr_pid || !curr_pid->enabled) continue;
@@ -3957,62 +4024,72 @@ static void autopid_task(void *pvParameters)
                             parameter_t *param = &curr_pid->parameters[p];
                             if (!param->enabled) continue;
 
-                            // Logic: If group has a period, we force run (because run_batch is true).
-                            // If group period is 0, we fall back to individual timers.
-                            bool execute_now = false;
-                            
-                            if (group->period > 0) {
-                                execute_now = true; 
-                            } else {
-                                if (wc_timer_is_expired(&param->timer)) {
-                                    execute_now = true;
-                                    wc_timer_set(&param->timer, curr_pid->period > 0 ? curr_pid->period : 1000);
-                                }
-                            }
-
-                            if (execute_now) {
-                                execute_pid_parameter(curr_pid, param);
-                                vTaskDelay(1);
-                            }
+                            execute_pid_parameter(curr_pid, param);
                         }
                     }
                 }
             }
+
             // ==========================================================================================
             // [LEGACY] FLAT LIST MODE
             // ==========================================================================================
-            else {
+	    else if (autopid_config->pid_count > 0) {
 
                 for (uint32_t i = 0; i < autopid_config->pid_count; i++) {
                     pid_data_t *curr_pid = &autopid_config->pids[i];
+
+                    // Group bypass check
+                    bool is_in_group = false;
+                    if (autopid_config->use_groups) {
+                        for (uint32_t g = 0; g < autopid_config->group_count; g++) {
+                            for (uint32_t gp = 0; gp < autopid_config->groups[g].pid_count; gp++) {
+                                if (autopid_config->groups[g].pids[gp] == curr_pid) {
+                                    is_in_group = true; break;
+                                }
+                            }
+                            if (is_in_group) break;
+                        }
+                    }
+                    if (is_in_group) continue;
+
                     if ((curr_pid->pid_type == PID_STD && !autopid_config->pid_std_en) ||
                         (curr_pid->pid_type == PID_CUSTOM && !autopid_config->pid_custom_en) ||
                         (curr_pid->pid_type == PID_SPECIFIC && !autopid_config->pid_specific_en)) continue;
 
                     if (!curr_pid->enabled) continue;
-
                     for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
                         parameter_t *param = &curr_pid->parameters[p];
                         if (!param->enabled) continue;
 
                         if (wc_timer_is_expired(&param->timer)) {
-                            if (curr_pid->pid_type != previous_pid_type) {
-                                switch (curr_pid->pid_type) {
-                                    case PID_CUSTOM: if(autopid_config->custom_init) { ESP_LOGI(TAG, "Custom Init: %s", autopid_config->custom_init); send_commands(autopid_config->custom_init, 2); } break;
-                                    case PID_STD: if(autopid_config->standard_init) { ESP_LOGI(TAG, "Standard Init: %s", autopid_config->standard_init); send_commands(autopid_config->standard_init, 2); } break;
-                                    case PID_SPECIFIC: if(autopid_config->specific_init) { ESP_LOGI(TAG, "Specific Init: %s", autopid_config->specific_init); send_commands(autopid_config->specific_init, 2); } break;
-                                    default: break;
-                                }
-                                previous_pid_type = curr_pid->pid_type;
-                            }
+			  if (curr_pid->pid_type != previous_pid_type) {
+			    // FORCE a protocol reset when switching list types
+			    current_active_init = NULL; 
 
-                            execute_pid_parameter(curr_pid, param);
-                            wc_timer_set(&param->timer, param->period);
-                            
-                            xSemaphoreGive(autopid_config->mutex);
-                            dev_status_wait_for_bits(DEV_AUTOPID_ELM327_APP_BIT, portMAX_DELAY);
-                            vTaskDelay(pdMS_TO_TICKS(5));
-                            xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
+			    switch (curr_pid->pid_type) {
+			    case PID_CUSTOM: 
+			      if(autopid_config->custom_init) {
+				ESP_LOGI(TAG, "Switching to Custom Init: %s", autopid_config->custom_init);
+				send_commands(autopid_config->custom_init, 2); 
+			      }
+			      break;
+			    case PID_STD: 
+			      if(autopid_config->standard_init) {
+				send_commands(autopid_config->standard_init, 2); 
+			      }
+			      break;
+			    case PID_SPECIFIC: 
+			      if(autopid_config->specific_init) {
+				send_commands(autopid_config->specific_init, 2); 
+			      }
+			      break;
+			    default: break;
+			    }
+			    previous_pid_type = curr_pid->pid_type;
+			  }
+
+			  execute_pid_parameter(curr_pid, param);
+			  wc_timer_set(&param->timer, param->period);
                         }
                     }
                 }
@@ -4024,7 +4101,6 @@ static void autopid_task(void *pvParameters)
             if (autopid_processing_task_handle != NULL) {
                 xTaskNotifyGive(autopid_processing_task_handle);
             }	
-            vTaskDelay(pdMS_TO_TICKS(5));
         }
 
         // CAN Filters Logic (Monitor Window)
@@ -4069,10 +4145,11 @@ static void autopid_task(void *pvParameters)
         {
             if (!pid_polling_paused)
             {
-                if (all_parameters_failed(autopid_config))
+               if (all_parameters_failed(autopid_config))
                 {
                     xEventGroupClearBits(xautopid_event_group, ECU_CONNECTED_BIT);
                     ESP_LOGW(TAG, "All parameters failed - ECU disconnected");
+		    current_active_init = NULL;
                 }
                 else
                 {
@@ -4306,21 +4383,16 @@ void autopid_init(char *id, bool enable_logging, uint32_t logging_period)
  * so that the OBD sampler doesn't have to wait for string formatting.
  */
 static void autopid_processing_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Starting high-speed processing task");
-    
     for (;;) {
-        // Wait indefinitely for a notification from the sampler task
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        // Wait indefinitely for the lock to guarantee the JSON is built
-        if (autopid_lock(portMAX_DELAY)) {
-            // 1. Rebuild the global JSON string (the heavy part)
-            autopid_data_update(autopid_config);
-            
-            // 2. Perform any batch publishing logic here
-            // (e.g., check if it's time to send an MQTT packet)
-            
+        // Try to take the lock, but don't hang the whole system if sampler is busy
+        if (autopid_lock(500)) { 
+            autopid_data_update(autopid_config); // Build JSON
             autopid_unlock();
+            
+            // Allow the system to breathe after heavy string processing
+            vTaskDelay(1); 
         }
     }
 }

@@ -58,6 +58,59 @@ async function checkFirmwareUpdate() {
         setRTCTime();
     });
     let latest_car_models = null;
+
+// Helper function for the custom profile merge modal
+function promptProfileMerge(modelName, actionText = "uploading a local profile for") {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('profile_upload_modal');
+        const text = document.getElementById('profile_upload_modal_text');
+        
+        text.innerHTML = `You are ${actionText} <b>${modelName}</b>, which is currently active on your screen.<br><br>Do you want to <b>MERGE</b> the new groups with your existing ones, or completely <b>REPLACE</b> your existing profile?`;
+        
+        modal.style.display = 'flex';
+
+        // Bind the global function to resolve the promise based on the button clicked
+        window.resolveProfileUpload = function(choice) {
+            modal.style.display = 'none';
+            resolve(choice); // Returns 'merge', 'replace', or 'cancel'
+        };
+    });
+}
+
+// Helper function for switching to a different vehicle profile
+function promptProfileSwitch(currentModel, newModel) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('profile_upload_modal');
+        const header = modal.querySelector('.modal-header');
+        const text = document.getElementById('profile_upload_modal_text');
+        const footer = modal.querySelector('.modal-footer');
+        
+        header.innerHTML = "Different Vehicle Detected";
+        header.style.color = "var(--primary-color)"; // Keep it blue, it's an option now, not just a danger!
+        
+        text.innerHTML = `You are currently editing <b>${currentModel || 'an unsaved profile'}</b>, but the file contains <b>${newModel}</b>.<br><br>Do you want to completely <b>REPLACE</b> your workspace with this new vehicle, or <b>MERGE</b> these new PIDs into your current ${currentModel || 'vehicle'} profile?`;
+        
+        // Add the third "Merge Anyway" button
+        footer.innerHTML = `
+            <button class="system-button" onclick="resolveProfileUpload('cancel')">Cancel</button>
+            <button class="system-button danger" onclick="resolveProfileUpload('replace')">Replace Entirely</button>
+            <button class="system-button success-button" onclick="resolveProfileUpload('merge')">Merge Into Current</button>
+        `;
+        
+        modal.style.display = 'flex';
+
+        window.resolveProfileUpload = function(choice) {
+            modal.style.display = 'none';
+            
+            // Reset the modal header text for the standard merge prompt next time
+            header.innerHTML = "Profile Conflict Detected";
+            
+            resolve(choice); // Returns 'merge', 'replace', or 'cancel'
+        };
+    });
+}
+
+
     let bleAlertShown = false;
     window.cachedPidGroups = []; // <--- ADD THIS LINE
 
@@ -159,49 +212,133 @@ async function checkFirmwareUpdate() {
             notification.classList.remove("show");
         }, duration);
     }
-    async function fetchVehicleProfiles() {
+
+
+     async function fetchVehicleProfiles() {
         try {
-            if (!navigator.onLine) {
-                throw new Error('No internet connection');
-            }
+            if (!navigator.onLine) throw new Error('No internet connection');
             
+            const currentSelectedModel = document.getElementById("car_model")?.value || "Not Selected";
+            
+            // 1. Sync Groups to memory
+            if (typeof syncGroupsFromUIToMemory === 'function') syncGroupsFromUIToMemory();
+            
+            // 2. Capture the active workspace to prevent GitHub from wiping your unsaved edits
+            let preservedCar = null;
+            if (currentSelectedModel !== "Not Selected" && latest_car_models && Array.isArray(latest_car_models.cars)) {
+                let active = latest_car_models.cars.find(c => c.car_model === currentSelectedModel);
+                if (!active) {
+                    active = { car_model: currentSelectedModel, pids: [], pid_groups: [], can_filters: [] };
+                    latest_car_models.cars.push(active);
+                }
+                
+                // Scrape flat PIDs
+                const specificPidEntries = document.querySelectorAll('.specific-pid-entry');
+                if (specificPidEntries.length > 0) {
+                    active.pids = Array.from(specificPidEntries).map(entry => ({
+                        pid: entry.querySelector('.pid-input')?.value || '',
+                        pid_init: entry.querySelector('.pid-init-input')?.value || '',
+                        enabled: entry.querySelector('.enabled-chk')?.checked !== false,
+                        parameters: [{
+                            name: entry.querySelector('.name-input')?.value || '',
+                            expression: entry.querySelector('.expression-input')?.value || '',
+                            unit: entry.querySelector('.unit-input')?.value || '',
+                            class: entry.querySelector('.class-input')?.value || '',
+                            period: entry.querySelector('.period-input')?.value || '',
+                            min: entry.querySelector('.min-input')?.value || '',
+                            max: entry.querySelector('.max-input')?.value || '',
+                            type: entry.querySelector('.type-select')?.value || 'Default',
+                            send_to: entry.querySelector('.send-to-input')?.value || ''
+                        }]
+                    }));
+                }
+                
+                // Scrape CAN Filters
+                const specificFilterEntries = document.querySelectorAll('.specific-canfilter-entry');
+                if (specificFilterEntries.length > 0) {
+                    const grouped = new Map();
+                    specificFilterEntries.forEach(entry => {
+                        const fidRaw = entry.querySelector('.frame-id-input')?.value || '';
+                        let frameIdOut = fidRaw;
+                        if (typeof normalizeFrameIdInputToNumber === 'function') {
+                            const fidNum = normalizeFrameIdInputToNumber(fidRaw);
+                            frameIdOut = (fidNum !== null) ? fidNum : String(fidRaw).trim();
+                        }
+                        if (!frameIdOut) return;
+                        const key = String(frameIdOut).toLowerCase();
+                        if (!grouped.has(key)) grouped.set(key, { frame_id: frameIdOut, parameters: [] });
+                        grouped.get(key).parameters.push({
+                            name: entry.querySelector('.name-input')?.value || '',
+                            expression: entry.querySelector('.expression-input')?.value || '',
+                            unit: entry.querySelector('.unit-input')?.value || '',
+                            class: entry.querySelector('.class-input')?.value || '',
+                            period: entry.querySelector('.period-input')?.value || '',
+                            min: entry.querySelector('.min-input')?.value || '',
+                            max: entry.querySelector('.max-input')?.value || '',
+                            type: entry.querySelector('.type-select')?.value || 'Default',
+                            send_to: entry.querySelector('.send-to-input')?.value || '',
+                            enabled: entry.querySelector('.enabled-chk')?.checked !== false
+                        });
+                    });
+                    active.can_filters = Array.from(grouped.values());
+                }
+                
+                preservedCar = JSON.parse(JSON.stringify(active)); // Deep copy to secure it!
+            }
+
+            // 3. Fetch DB
             const response = await fetch('https://raw.githubusercontent.com/meatpiHQ/wican-fw/main/vehicle_profiles.json');
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
+            if (!response.ok) throw new Error('Network response was not ok');
+            const dbData = await response.json();
+
+            // 4. Overwrite global memory
+            latest_car_models = dbData;
+            if (!latest_car_models.cars) latest_car_models.cars = [];
+
+            // 5. INJECT THE PRESERVED CAR BACK INTO MEMORY (No Popups!)
+            if (preservedCar) {
+                const dbIndex = latest_car_models.cars.findIndex(c => c.car_model === currentSelectedModel);
+                if (dbIndex !== -1) {
+                    latest_car_models.cars[dbIndex] = preservedCar;
+                } else {
+                    latest_car_models.cars.push(preservedCar);
+                }
             }
-            const data = await response.json();
-            console.log(data);
-            latest_car_models = data;
-            const carModels = [];
-            carModels.push("Not Selected");
-            if (data && Array.isArray(data.cars)) {
-                data.cars.forEach(car => {
-                    if (car.car_model) {
-                        carModels.push(car.car_model);
-                    }
-                });
-            }
-            console.log(carModels);
+
+            // 6. Update Dropdown List Quietly
+            const carModels = ["Not Selected"];
+            latest_car_models.cars.forEach(car => {
+                if (car.car_model) carModels.push(car.car_model);
+            });
+
             var mod = { "supported": carModels };
             loadCarModels(mod);
+
+            // Re-select the active car silently
+            if (currentSelectedModel !== "Not Selected") {
+                document.getElementById('car_model').value = currentSelectedModel;
+                window.activeDropdownModel = currentSelectedModel;
+            }
+
             enableAutoStoreButton();
-            
+            showNotification("Latest profiles downloaded from GitHub.", "green");
+
         } catch (error) {
-            console.error('There was a problem with the fetch operation:', error);
-            showNotification("Unable to fetch vehicle_profiles.json. " + error.message, "red");
+            console.error('Fetch error:', error);
+            showNotification("Unable to fetch profiles. " + error.message, "red");
         }
     }
 
+  
     function toggleCarModel() {
-        const carSpecific = document.getElementById("car_specific").value;
         const carModelSelect = document.getElementById("car_model");
-        if (carSpecific === "disable") {
-            carModelSelect.disabled = true;
-        } else {
-            carModelSelect.disabled = false;
+        if (carModelSelect) {
+            carModelSelect.disabled = false; // ALWAYS keep the profile selector enabled!
         }
         toggleDiscovery();
     }
+
+
     function toggleStandardPIDOptions() {
         const standardPidsSelect = document.getElementById("standard_pids");
         const ecuProtocolSelect = document.getElementById("ecu_protocol");
@@ -400,122 +537,253 @@ async function checkFirmwareUpdate() {
     }
 
  
-function loadLocalCarModels() {
-        const fileInput = document.getElementById("car_data_file");
+  function loadLocalCarModels() {
+    const fileInput = document.getElementById("car_data_file");
 
-        if (fileInput.files.length == 0) {
-            showNotification("No files selected!", "red");
-            return;
-        }
+    if (fileInput.files.length == 0) {
+        showNotification("No files selected!", "red");
+        return;
+    }
 
-        const file = fileInput.files[0];
+    const file = fileInput.files[0];
+    const reader = new FileReader();
+    
+    reader.onload = async function(event) {
+        try {
+            const jsonData = JSON.parse(event.target.result);
+            let data;
 
-        const reader = new FileReader();
-        reader.onload = async function(event) {
-            try {
-                const jsonData = JSON.parse(event.target.result);
-                let data;
+            const isMultiCar = (jsonData && Array.isArray(jsonData.cars));
+            const isSingleCar = (jsonData && jsonData.car_model && Array.isArray(jsonData.pids));
 
-                const isMultiCar = (jsonData && Array.isArray(jsonData.cars));
-                const isSingleCar = (jsonData && jsonData.car_model && Array.isArray(jsonData.pids));
-
-                const looksLikeShorthandSingleProfile = (() => {
-                    if (!isSingleCar) return false;
-                    for (const pid of jsonData.pids) {
-                        if (!pid || pid.parameters === undefined || pid.parameters === null) continue;
-                        if (Array.isArray(pid.parameters)) return false; // already in target format
-                        if (typeof pid.parameters !== 'object') continue;
-                        const values = Object.values(pid.parameters);
-                        // Shorthand single-profile format maps NAME -> "expression" (string)
-                        if (values.some(v => typeof v === 'string')) return true;
-                    }
-                    return false;
-                })();
-
-                if (isMultiCar) {
-                    data = jsonData;
-                } else if (looksLikeShorthandSingleProfile) {
-                    showNotification("Shorthand single-profile detected. Loading parameter metadata...", "blue");
-                    try {
-                        const paramsResponse = await fetch('https://raw.githubusercontent.com/meatpiHQ/wican-fw/main/.vehicle_profiles/params.json');
-                        const paramsData = await paramsResponse.json();
-                        const convertedCar = convertSingleCarFormat(jsonData, paramsData);
-                        data = { cars: [convertedCar] };
-                        showNotification("Profile loaded successfully!", "green");
-                    } catch (fetchError) {
-                        console.warn('Failed to fetch params.json, using basic conversion:', fetchError);
-                        data = { cars: [convertSingleCarBasic(jsonData)] };
-                        showNotification("Couldn't download params.json for parameter metadata. Make sure you're connected to the internet. Loaded profile without metadata.", "yellow");
-                    }
-                } else if (isSingleCar) {
-                    // Already in vehicle_profiles.json schema; wrap without conversion
-                    data = { cars: [jsonData] };
-                } else {
-                    // Existing fallback
-                    data = jsonData.car_model ? { cars: [jsonData] } : jsonData;
+            // Legacy formatting conversions
+            const looksLikeShorthandSingleProfile = (() => {
+                if (!isSingleCar) return false;
+                for (const pid of jsonData.pids) {
+                    if (!pid || pid.parameters === undefined || pid.parameters === null) continue;
+                    if (Array.isArray(pid.parameters)) return false; 
+                    if (typeof pid.parameters !== 'object') continue;
+                    const values = Object.values(pid.parameters);
+                    if (values.some(v => typeof v === 'string')) return true;
                 }
+                return false;
+            })();
 
-                // --- ADD THIS BLOCK START (Resolved from HEAD) ---
-                // Capture groups to memory
-                window.cachedPidGroups = [];
-                if (data.cars && data.cars[0] && data.cars[0].pid_groups) {
-                    window.cachedPidGroups = data.cars[0].pid_groups;
-                    console.log("Cached " + window.cachedPidGroups.length + " PID groups from file.");
-                } else if (data.pid_groups) {
-                    // Handle flat format if necessary
-                    window.cachedPidGroups = data.pid_groups;
+            if (isMultiCar) {
+                data = jsonData;
+            } else if (looksLikeShorthandSingleProfile) {
+                showNotification("Shorthand single-profile detected. Loading parameter metadata...", "blue");
+                try {
+                    const paramsResponse = await fetch('https://raw.githubusercontent.com/meatpiHQ/wican-fw/main/.vehicle_profiles/params.json');
+                    const paramsData = await paramsResponse.json();
+                    const convertedCar = convertSingleCarFormat(jsonData, paramsData);
+                    data = { cars: [convertedCar] };
+                    showNotification("Profile loaded successfully!", "green");
+                } catch (fetchError) {
+                    data = { cars: [convertSingleCarBasic(jsonData)] };
                 }
-                // --- ADD THIS BLOCK END ---
+            } else if (isSingleCar) {
+                data = { cars: [jsonData] };
+            } else {
+                data = jsonData.car_model ? { cars: [jsonData] } : jsonData;
+            }
+
+            // --- NEW: POPULATE GLOBAL/CUSTOM TABS ---
+
+            // 2. Standard PIDs Tab
+            if (jsonData.std_pids && Array.isArray(jsonData.std_pids)) {
+                const stdContainer = document.querySelector('.std-pid-entries');
+                if (stdContainer) stdContainer.innerHTML = '';
+                jsonData.std_pids.forEach(pidData => {
+                    addSelectedPID({
+                        Name: pidData.Name || '',
+                        ReceiveHeader: pidData.ReceiveHeader || '',
+                        Period: pidData.Period || '',
+                        Type: pidData.Type || 'Default',
+                        Send_to: pidData.Send_to || '',
+                        enabled: pidData.enabled
+                    });
+                });
+            }
+
+            // 3. User Custom PIDs Tab
+            // Note: We only load this if it's a unified MultiCar file. Legacy single car files use the "pids" array for Specific PIDs!
+            if (!isSingleCar && jsonData.pids && Array.isArray(jsonData.pids)) {
+                const customContainer = document.querySelector('.pid-entries');
+                if (customContainer) customContainer.innerHTML = '';
+                jsonData.pids.forEach(pidData => {
+                    addCollapsibleRow({
+                        Name: pidData.Name || '',
+                        Init: pidData.Init || '',
+                        PID: pidData.PID || '',
+                        Expression: pidData.Expression || '',
+                        Unit: pidData.Unit || pidData.unit || '',
+                        Class: pidData.Class || pidData.class || '',
+                        MinValue: pidData.MinValue || '',
+                        MaxValue: pidData.MaxValue || '',
+                        Period: pidData.Period || '',
+                        Type: pidData.Type || 'Default',
+                        Send_to: pidData.Send_to || '',
+                        enabled: pidData.enabled
+                    });
+                });
+            }
+
+            // 4. User Custom CAN Filters Tab
+            if (!isSingleCar && jsonData.can_filters && Array.isArray(jsonData.can_filters)) {
+                const customFilterContainer = document.querySelector('.custom-canfilter-entries');
+                if (customFilterContainer) customFilterContainer.innerHTML = '';
+                jsonData.can_filters.forEach(f => {
+                    const fid = (f && f.frame_id !== undefined) ? f.frame_id : null;
+                    const params = (f && Array.isArray(f.parameters)) ? f.parameters : [];
+                    if (params.length) {
+                        params.forEach(param => {
+                            addCustomCanFilterEntry({
+                                frame_id: fid,
+                                parameter: {
+                                    name: param.name,
+                                    expression: param.expression,
+                                    unit: param.unit,
+                                    class: param.class,
+                                    period: param.period,
+                                    type: param.type,
+                                    min: param.min,
+                                    max: param.max,
+                                    send_to: param.send_to,
+                                    enabled: param.enabled
+                                }
+                            });
+                        });
+                    }
+                });
+            }
+
+            // --- RESUME EXISTING CAR PROFILE LOGIC (WITH SMART MERGE) ---
+            const currentSelectedModel = document.getElementById("car_model")?.value;
+            const uploadedModel = (data.cars && data.cars[0]) ? data.cars[0].car_model : null;
+            const uploadedGroups = (data.cars && data.cars[0] && data.cars[0].pid_groups) ? data.cars[0].pid_groups : (data.pid_groups || []);
+
+            if (currentSelectedModel && uploadedModel && currentSelectedModel === uploadedModel) {
+                if (typeof syncGroupsFromUIToMemory === 'function') syncGroupsFromUIToMemory();
+                const existingGroups = (latest_car_models && latest_car_models.pid_groups) ? latest_car_models.pid_groups : [];
                 
-                latest_car_models = data;
-                const carModels = [];
-                carModels.push("Not Selected");
+                if (existingGroups.length > 0 && uploadedGroups.length > 0) {
+                    
+                    // Pause execution and wait for the user to click a modal button
+                    const userChoice = await promptProfileMerge(uploadedModel);
+                    
+                    if (userChoice === 'cancel') {
+                        showNotification("Upload cancelled.", "yellow");
+                        return; // Halt the upload process entirely, keeping UI unchanged
+                    } 
+                    else if (userChoice === 'merge') {
+                        // SMART MERGE: Prevent duplicates by matching group_name
+                        let mergedGroups = [...existingGroups];
+                        uploadedGroups.forEach(uploadedGroup => {
+                            const existingIndex = mergedGroups.findIndex(g => g.group_name === uploadedGroup.group_name);
+                            if (existingIndex !== -1) {
+                                mergedGroups[existingIndex] = uploadedGroup; // Overwrite matching group
+                            } else {
+                                mergedGroups.push(uploadedGroup); // Append new group
+                            }
+                        });
+                        
+                        if (data.cars && data.cars[0]) {
+                            data.cars[0].pid_groups = mergedGroups;
+                        } else {
+                            data.pid_groups = mergedGroups;
+                        }
+                        showNotification("Profile Merged: Existing groups updated, new groups added.", "green");
+                    } 
+                    else if (userChoice === 'replace') {
+                        showNotification("Existing Profile Replaced.", "blue");
+                    }
+                }
+            }
+            else if (currentSelectedModel && currentSelectedModel !== "Not Selected" && uploadedModel && currentSelectedModel !== uploadedModel) {
+                // Names do NOT match! Ask the user what they want to do.
+                if (typeof syncGroupsFromUIToMemory === 'function') syncGroupsFromUIToMemory();
+                const existingGroups = (latest_car_models && latest_car_models.pid_groups) ? latest_car_models.pid_groups : [];
+
+                const userChoice = await promptProfileSwitch(currentSelectedModel, uploadedModel);
                 
-                if (data && Array.isArray(data.cars)) {
-                    data.cars.forEach(car => {
-                        if (car.car_model) {
-                            carModels.push(car.car_model);
+                if (userChoice === 'cancel') {
+                    showNotification("Upload cancelled. Your workspace is safe.", "yellow");
+                    return; // Halt the upload
+                }
+                else if (userChoice === 'merge') {
+                    // EXPANSION PACK MERGE: Inject the new groups, but KEEP the current car name!
+                    let mergedGroups = [...existingGroups];
+                    uploadedGroups.forEach(uploadedGroup => {
+                        const existingIndex = mergedGroups.findIndex(g => g.group_name === uploadedGroup.group_name);
+                        if (existingIndex !== -1) {
+                            mergedGroups[existingIndex] = uploadedGroup; // Overwrite matching group
+                        } else {
+                            mergedGroups.push(uploadedGroup); // Append new group
                         }
                     });
+                    
+                    // Force the uploaded data to inherit the currently active car model name
+                    data.cars[0].car_model = currentSelectedModel;
+                    data.cars[0].pid_groups = mergedGroups;
+                    
+                    showNotification(`Profile Merged! ${uploadedModel} PIDs injected into ${currentSelectedModel}.`, "green");
                 }
-                
-                console.log(carModels);
-                var mod = { "supported": carModels };
-                loadCarModels(mod);
-                enableAutoStoreButton();
+                else if (userChoice === 'replace') {
+                    showNotification(`${uploadedModel} loaded. Existing profile wiped.`, "blue");
+                }
 
-                // If a single-car profile was uploaded, auto-enable vehicle-specific mode,
-                // select that model, and trigger the change handler to populate PIDs/filters.
-                try {
-                    if (data && Array.isArray(data.cars) && data.cars.length === 1 && data.cars[0]?.car_model) {
-                        const carSpecificEl = document.getElementById('car_specific');
-                        if (carSpecificEl && carSpecificEl.value === 'disable') {
-                            carSpecificEl.value = 'enable';
-                        }
-                        try { toggleCarModel(); } catch(_) {}
+                // Reset modal footer buttons for next time
+                const modal = document.getElementById('profile_upload_modal');
+                modal.querySelector('.modal-footer').innerHTML = `
+                    <button class="system-button" onclick="resolveProfileUpload('cancel')">Cancel</button>
+                    <button class="system-button danger" onclick="resolveProfileUpload('replace')">Replace Entirely</button>
+                    <button class="system-button success-button" onclick="resolveProfileUpload('merge')">Merge Groups</button>
+                `;
+            }	    
 
-                        const carModelEl = document.getElementById('car_model');
-                        if (carModelEl) {
-                            carModelEl.value = data.cars[0].car_model;
-                            carModelEl.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
+            window.cachedPidGroups = (data.cars && data.cars[0] && data.cars[0].pid_groups) ? data.cars[0].pid_groups : uploadedGroups;
+            latest_car_models = data;
+            
+            const carModels = ["Not Selected"];
+            if (data && Array.isArray(data.cars)) {
+                data.cars.forEach(car => {
+                    if (car.car_model) carModels.push(car.car_model);
+                });
+            }
+            
+            loadCarModels({ "supported": carModels });
+            enableAutoStoreButton();
 
-                        showNotification(`Loaded profile: ${data.cars[0].car_model}`, 'green');
+            // Trigger UI update for the Vehicle Groups and Specific tabs
+            try {
+                if (data && Array.isArray(data.cars) && data.cars.length === 1 && data.cars[0]?.car_model) {
+                    const carSpecificEl = document.getElementById('car_specific');
+                    if (carSpecificEl && carSpecificEl.value === 'disable') {
+                        carSpecificEl.value = 'enable';
                     }
-                } catch (e) {
-                    console.warn('Auto-select uploaded car model failed:', e);
-                }
-                
-                if (!jsonData.car_model || !jsonData.pids) {
-                    showNotification("Car models loaded successfully!", "green");
+                    try { toggleCarModel(); } catch(_) {}
+
+                    const carModelEl = document.getElementById('car_model');
+                    if (carModelEl) {
+                        carModelEl.value = data.cars[0].car_model;
+                        carModelEl.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+
+                    showNotification(`Loaded profile: ${data.cars[0].car_model}`, 'green');
                 }
             } catch (e) {
-                showNotification("Invalid JSON file!", "red");
-                console.error('JSON parse error:', e);
+                console.warn('Auto-select uploaded car model failed:', e);
             }
-        };
-        reader.readAsText(file);
-    }
+            
+        } catch (e) {
+            showNotification("Invalid JSON file!", "red");
+            console.error('JSON parse error:', e);
+        }
+    };
+    reader.readAsText(file);
+}
+
 
     function convertSingleCarFormat(singleCarData, paramsData) {
         // Convert from shorthand single-profile (NAME -> expression map) to vehicle_profiles.json format
@@ -773,11 +1041,9 @@ async function runPidTest(kind, entry) {
         if (pidInit.trim()) payload.pid_init = pidInit;
         payload.expr = expr;
     } else if (kind === 'custom') {
-        const init = document.getElementById('initialisation')?.value || '';
         const pid = entry.querySelector('.pid-input')?.value || '';
         const pidInit = entry.querySelector('.init-input')?.value || '';
         const expr = entry.querySelector('.expression-input')?.value || '';
-        if (init.trim()) payload.init = init;
         payload.pid = pid.trim();
         if (pidInit.trim()) payload.pid_init = pidInit;
         payload.expr = expr;
@@ -1934,11 +2200,6 @@ function loadAutoTable(jsonData) {
         const customFilterContainer = document.querySelector('.custom-canfilter-entries');
         if (customFilterContainer) customFilterContainer.innerHTML = '';
 
-        const initialisationElement = document.getElementById("initialisation");
-        if (initialisationElement) {
-            initialisationElement.value = data.initialisation || '';
-        }
-
         const automateTable = document.getElementById("automate_table");
         if (!automateTable) {
             console.error("Automate table not found");
@@ -1953,6 +2214,7 @@ function loadAutoTable(jsonData) {
         };
 
         setElementValue("car_specific", data.car_specific, 'disable');
+	setElementValue("custom_pids", data.custom_pids, 'enable');
         setElementValue("ha_discovery", 'disable');
         setElementValue("grouping", data.grouping, 'disable');
         setElementValue("disable_on_sleep_voltage", data.disable_on_sleep_voltage, 'disable');
@@ -2137,7 +2399,6 @@ async function storeAutoTableData() {
         const entries = document.querySelectorAll('.pid-entry');
         const standardEntries = document.querySelectorAll('.std-pid-entry');
 
-        const initialisationValue = document.getElementById("initialisation")?.value || '';
         const groupingValue = document.getElementById("grouping")?.value || 'disable';
         const disableOnSleepVoltageValue = document.getElementById("disable_on_sleep_voltage")?.value || 'disable';
         const pidPollingMinVoltageValueRaw = document.getElementById("pid_polling_min_voltage")?.value;
@@ -2148,6 +2409,7 @@ async function storeAutoTableData() {
         const webhook_data_mode = document.getElementById("webhook_data_mode")?.value || 'changed';
         const ha_discoveryValue = document.getElementById("ha_discovery")?.value || 'disable';
         const carSpecificValue = document.getElementById("car_specific")?.value || 'disable';
+	const customPidsValue = document.getElementById("custom_pids")?.value || 'enable';
         const carModelField = document.getElementById("car_model");
         const standard_pidsValue = document.getElementById("standard_pids")?.value || 'disable';
         const ecu_protocolValue = document.getElementById("ecu_protocol")?.value || '6';
@@ -2405,12 +2667,12 @@ async function storeAutoTableData() {
         }
 
         const jsonData = {
-            initialisation: initialisationValue,
             grouping: groupingValue,
             disable_on_sleep_voltage: disableOnSleepVoltageValue,
             pid_polling_min_voltage: pidPollingMinVoltageValue,
             webhook_data_mode: webhook_data_mode,
             car_specific: carSpecificValue,
+	    custom_pids: customPidsValue,
             ha_discovery: ha_discoveryValue,
             car_model: carModelValue,
             pids: custom_pid_data,
@@ -4059,84 +4321,235 @@ async function Load() {
         }
 
         // --- MERGED CAR MODEL CHANGE LISTENER ---
-        document.getElementById("car_model").addEventListener('change', function() {
-            const pidContainer = document.querySelector('.specific-pid-entries');
-            if (pidContainer) pidContainer.innerHTML = '';
+        window.activeDropdownModel = document.getElementById("car_model")?.value || "Not Selected"; 
 
-            const filterContainer = document.querySelector('.specific-canfilter-entries');
-            if (filterContainer) filterContainer.innerHTML = '';
-            
+        document.getElementById("car_model").addEventListener('change', async function(e) {
             const selectedModel = this.value;
-            const specificInitElement = document.getElementById("specific_init");
-            if (specificInitElement) specificInitElement.value = '';
+            const previousModel = window.activeDropdownModel || "Not Selected";
 
-            if (!selectedModel || selectedModel === 'Not Selected') {
-                enableAutoStoreButton();
+            if (!e.isTrusted) {
+                window.activeDropdownModel = selectedModel;
+                executeCarRender(selectedModel);
                 return;
             }
 
-            if (latest_car_models && Array.isArray(latest_car_models.cars)) {
-                const selectedCar = latest_car_models.cars.find(car => car && car.car_model === selectedModel);
-                if (!selectedCar) {
-                    enableAutoStoreButton();
-                    return;
+            if (selectedModel === previousModel) return;
+
+            // 1. Temporarily revert dropdown so sync targets the correct previous car
+            this.value = previousModel;
+
+            if (typeof syncGroupsFromUIToMemory === 'function') syncGroupsFromUIToMemory();
+
+            // 2. Scrape flat PIDs & Filters into memory for the previous model
+            let prevCar = null;
+            if (previousModel !== "Not Selected" && latest_car_models && latest_car_models.cars) {
+                prevCar = latest_car_models.cars.find(c => c.car_model === previousModel);
+                if (!prevCar) {
+                    prevCar = { car_model: previousModel, pids: [], pid_groups: [], can_filters: [] };
+                    latest_car_models.cars.push(prevCar);
                 }
 
-                if (specificInitElement) specificInitElement.value = selectedCar.init || '';
-
-                if (selectedCar.pids) {
-                    selectedCar.pids.forEach(pid => {
-                        if (pid && pid.parameters) {
-                            pid.parameters.forEach(param => {
-                                addCarParameter({
-                                    ...param,
-                                    pid: pid.pid,
-                                    pid_init: pid.pid_init,
-                                    enabled: pid.enabled
-                                });
-                            });
-                        }
+                const specificPidEntries = document.querySelectorAll('.specific-pid-entry');
+                if (specificPidEntries.length > 0) {
+                    prevCar.pids = Array.from(specificPidEntries).map(entry => {
+                        return {
+                            pid: entry.querySelector('.pid-input')?.value || '',
+                            pid_init: entry.querySelector('.pid-init-input')?.value || '',
+                            enabled: entry.querySelector('.enabled-chk')?.checked !== false,
+                            parameters: [{
+                                name: entry.querySelector('.name-input')?.value || '',
+                                expression: entry.querySelector('.expression-input')?.value || '',
+                                unit: entry.querySelector('.unit-input')?.value || '',
+                                class: entry.querySelector('.class-input')?.value || '',
+                                period: entry.querySelector('.period-input')?.value || '',
+                                min: entry.querySelector('.min-input')?.value || '',
+                                max: entry.querySelector('.max-input')?.value || '',
+                                type: entry.querySelector('.type-select')?.value || 'Default',
+                                send_to: entry.querySelector('.send-to-input')?.value || ''
+                            }]
+                        };
                     });
                 }
 
-                if (Array.isArray(selectedCar.can_filters)) {
-                    selectedCar.can_filters.forEach(f => {
-                        const fid = (f && f.frame_id !== undefined) ? f.frame_id : null;
-                        const params = (f && Array.isArray(f.parameters)) ? f.parameters : [];
-                        if (params.length) {
-                            params.forEach(param => {
-                                addVehicleSpecificCanFilterEntry({
-                                    frame_id: fid,
-                                    parameter: {
-                                        name: param.name,
-                                        expression: param.expression,
-                                        unit: param.unit,
-                                        class: param.class,
-                                        period: param.period,
-                                        type: param.type,
-                                        min: param.min,
-                                        max: param.max,
-                                        send_to: param.send_to,
-                                        enabled: param.enabled
-                                    }
-                                });
-                            });
-                        } else if (fid !== null) {
-                            addVehicleSpecificCanFilterEntry({ frame_id: fid, parameter: { name: 'New Parameter', period: '5000', type: 'Default', send_to: '' } });
+                const specificFilterEntries = document.querySelectorAll('.specific-canfilter-entry');
+                if (specificFilterEntries.length > 0) {
+                    const grouped = new Map();
+                    specificFilterEntries.forEach(entry => {
+                        const fidRaw = entry.querySelector('.frame-id-input')?.value || '';
+                        let frameIdOut = fidRaw;
+                        if (typeof normalizeFrameIdInputToNumber === 'function') {
+                            const fidNum = normalizeFrameIdInputToNumber(fidRaw);
+                            frameIdOut = (fidNum !== null) ? fidNum : String(fidRaw).trim();
                         }
-                    });
-                }
+                        if (!frameIdOut) return;
 
-                // -> PRESERVED CUSTOM FEATURE: Render the Groups Tab
-                if (selectedCar.pid_groups) {
-                    renderVehicleGroups(selectedCar.pid_groups);
-                } else {
-                    renderVehicleGroups([]);
+                        const key = String(frameIdOut).toLowerCase();
+                        if (!grouped.has(key)) grouped.set(key, { frame_id: frameIdOut, parameters: [] });
+                        
+                        grouped.get(key).parameters.push({
+                            name: entry.querySelector('.name-input')?.value || '',
+                            expression: entry.querySelector('.expression-input')?.value || '',
+                            unit: entry.querySelector('.unit-input')?.value || '',
+                            class: entry.querySelector('.class-input')?.value || '',
+                            period: entry.querySelector('.period-input')?.value || '',
+                            min: entry.querySelector('.min-input')?.value || '',
+                            max: entry.querySelector('.max-input')?.value || '',
+                            type: entry.querySelector('.type-select')?.value || 'Default',
+                            send_to: entry.querySelector('.send-to-input')?.value || '',
+                            enabled: entry.querySelector('.enabled-chk')?.checked !== false
+                        });
+                    });
+                    prevCar.can_filters = Array.from(grouped.values());
                 }
             }
 
-            enableAutoStoreButton();
+            // Restore dropdown visually to what the user clicked
+            this.value = selectedModel;
+
+            // 3. CHECK THE SCREEN
+            const hasScreenData = document.querySelectorAll('.group-container, .specific-pid-entry, .std-pid-entry, .pid-entry, .specific-canfilter-entry, .custom-canfilter-entry').length > 0;
+
+            if (hasScreenData && previousModel !== "Not Selected") {
+                const userChoice = await promptProfileSwitch(previousModel, selectedModel);
+                
+                if (userChoice === 'cancel') {
+                    this.value = previousModel; 
+                    return;
+                }
+                else if (userChoice === 'merge') {
+                    if (latest_car_models && latest_car_models.cars) {
+                        const newCar = latest_car_models.cars.find(c => c.car_model === selectedModel);
+
+                        if (newCar && prevCar) {
+                            const newGroups = JSON.parse(JSON.stringify(newCar.pid_groups || []));
+                            const newPids = JSON.parse(JSON.stringify(newCar.pids || []));
+                            const newFilters = JSON.parse(JSON.stringify(newCar.can_filters || []));
+
+                            // Merge Groups safely
+                            let mergedGroups = [...(prevCar.pid_groups || [])];
+                            newGroups.forEach(newGroup => {
+                                const existingIndex = mergedGroups.findIndex(g => g.group_name === newGroup.group_name);
+                                if (existingIndex !== -1) mergedGroups[existingIndex] = newGroup;
+                                else mergedGroups.push(newGroup);
+                            });
+                            prevCar.pid_groups = mergedGroups;
+
+                            // Merge Flat PIDs safely (prevent exact duplicates)
+                            let mergedPids = [...(prevCar.pids || [])];
+                            newPids.forEach(nPid => {
+                                const exists = mergedPids.some(p => p.pid === nPid.pid && p.parameters?.[0]?.name === nPid.parameters?.[0]?.name);
+                                if (!exists) mergedPids.push(nPid);
+                            });
+                            prevCar.pids = mergedPids;
+
+                            // Merge CAN Filters
+                            prevCar.can_filters = (prevCar.can_filters || []).concat(newFilters);
+                        }
+                    }
+                    
+                    // Revert the dropdown visually back to the original car, then re-render it
+                    this.value = previousModel;
+                    window.activeDropdownModel = previousModel;
+                    executeCarRender(previousModel);
+                    
+                    showNotification(`Profile Merged! ${selectedModel} data injected into ${previousModel}.`, "green");
+                    return;
+                }
+            }
+
+            // 5. Normal Replacement (User clicked Replace Entirely)
+            window.activeDropdownModel = selectedModel;
+            executeCarRender(selectedModel);
+            
+            function executeCarRender(modelToRender) {
+                const pidContainer = document.querySelector('.specific-pid-entries');
+                if (pidContainer) pidContainer.innerHTML = '';
+
+                const filterContainer = document.querySelector('.specific-canfilter-entries');
+                if (filterContainer) filterContainer.innerHTML = '';
+                
+                const specificInitElement = document.getElementById("specific_init");
+                if (specificInitElement) specificInitElement.value = '';
+
+                if (!modelToRender || modelToRender === 'Not Selected') {
+                    if (typeof renderVehicleGroups === 'function') renderVehicleGroups([]);
+                    if (typeof enableAutoStoreButton === 'function') enableAutoStoreButton();
+                    return;
+                }
+
+                if (latest_car_models && Array.isArray(latest_car_models.cars)) {
+                    const selectedCar = latest_car_models.cars.find(car => car && car.car_model === modelToRender);
+                    if (!selectedCar) {
+                        if (typeof renderVehicleGroups === 'function') renderVehicleGroups([]);
+                        if (typeof enableAutoStoreButton === 'function') enableAutoStoreButton();
+                        return;
+                    }
+
+                    if (specificInitElement) specificInitElement.value = selectedCar.init || '';
+
+                    // Draw Flat PIDs
+                    if (selectedCar.pids) {
+                        selectedCar.pids.forEach(pid => {
+                            if (pid && pid.parameters) {
+                                pid.parameters.forEach(param => {
+                                    if (typeof addCarParameter === 'function') {
+                                        addCarParameter({
+                                            ...param,
+                                            pid: pid.pid,
+                                            pid_init: pid.pid_init,
+                                            enabled: pid.enabled
+                                        });
+                                    }
+                                });
+                            }
+                        });
+                    }
+
+                    // Draw Filters
+                    if (Array.isArray(selectedCar.can_filters)) {
+                        selectedCar.can_filters.forEach(f => {
+                            const fid = (f && f.frame_id !== undefined) ? f.frame_id : null;
+                            const params = (f && Array.isArray(f.parameters)) ? f.parameters : [];
+                            if (params.length) {
+                                params.forEach(param => {
+                                    if (typeof addVehicleSpecificCanFilterEntry === 'function') {
+                                        addVehicleSpecificCanFilterEntry({
+                                            frame_id: fid,
+                                            parameter: {
+                                                name: param.name,
+                                                expression: param.expression,
+                                                unit: param.unit,
+                                                class: param.class,
+                                                period: param.period,
+                                                type: param.type,
+                                                min: param.min,
+                                                max: param.max,
+                                                send_to: param.send_to,
+                                                enabled: param.enabled
+                                            }
+                                        });
+                                    }
+                                });
+                            } else if (fid !== null) {
+                                if (typeof addVehicleSpecificCanFilterEntry === 'function') {
+                                    addVehicleSpecificCanFilterEntry({ frame_id: fid, parameter: { name: 'New Parameter', period: '5000', type: 'Default', send_to: '' } });
+                                }
+                            }
+                        });
+                    }
+
+                    // Draw Groups
+                    if (selectedCar.pid_groups) {
+                        if (typeof renderVehicleGroups === 'function') renderVehicleGroups(selectedCar.pid_groups);
+                    } else {
+                        if (typeof renderVehicleGroups === 'function') renderVehicleGroups([]);
+                    }
+                }
+                if (typeof enableAutoStoreButton === 'function') enableAutoStoreButton();
+            }
         });
+
+ 
 
         // Apply mode-dependent enable/disable rules after values are loaded
         try { toggleSmartConnectConfig(); } catch(_) {}
@@ -6382,12 +6795,11 @@ function cloneParameter(gIndex, pIndex, paramIndex) {
     renderVehicleGroups();
 }
 
-
 function downloadActiveProfile() {
     try {
         const carModelValue = document.getElementById("car_model")?.value || "Unknown_Car";
         
-        // 1. Prepare the base structure
+        // 1. Prepare the base structure for the Vehicle Profile (Groups & Specific)
         let carData = {
             car_model: carModelValue,
             init: document.getElementById("specific_init")?.value || "",
@@ -6396,14 +6808,12 @@ function downloadActiveProfile() {
             pid_groups: []
         };
 
-        // 2. Capture Groups (Includes pid_description and all new fields)
-        // Since the UI updates 'latest_car_models' in real-time, we grab it directly.
+        // 2. Capture Groups
         if (latest_car_models && latest_car_models.pid_groups) {
-            // Deep copy to ensure clean JSON export
             carData.pid_groups = JSON.parse(JSON.stringify(latest_car_models.pid_groups));
         }
 
-        // 3. Capture Legacy "Specific PIDs" (Scrape from DOM)
+        // 3. Capture Legacy "Specific PIDs"
         const specificPidEntries = document.querySelectorAll('.specific-pid-entry');
         if (specificPidEntries.length > 0) {
             carData.pids = Array.from(specificPidEntries).map(entry => {
@@ -6421,33 +6831,27 @@ function downloadActiveProfile() {
                         max: entry.querySelector('.max-input').value,
                         type: entry.querySelector('.type-select').value,
                         send_to: entry.querySelector('.send-to-input').value,
-                        // Preserve onchange if present
                         onchange: false 
                     }]
                 };
             });
         }
 
-        // 4. Capture CAN Filters (Scrape from DOM)
+        // 4. Capture Vehicle Specific CAN Filters
         const specificFilterEntries = document.querySelectorAll('.specific-canfilter-entry');
         if (specificFilterEntries.length > 0) {
             const grouped = new Map();
             specificFilterEntries.forEach(entry => {
                 const fidRaw = entry.querySelector('.frame-id-input')?.value || '';
-                // Use global helper if available, otherwise fallback to raw string
                 let frameIdOut = fidRaw;
                 if (typeof normalizeFrameIdInputToNumber === 'function') {
                     const fidNum = normalizeFrameIdInputToNumber(fidRaw);
                     frameIdOut = (fidNum !== null) ? fidNum : String(fidRaw).trim();
                 }
-                
                 if (!frameIdOut) return; 
 
                 const key = String(frameIdOut).toLowerCase();
-                
-                if (!grouped.has(key)) {
-                    grouped.set(key, { frame_id: frameIdOut, parameters: [] });
-                }
+                if (!grouped.has(key)) grouped.set(key, { frame_id: frameIdOut, parameters: [] });
                 
                 grouped.get(key).parameters.push({
                     name: entry.querySelector('.name-input')?.value || '',
@@ -6465,9 +6869,77 @@ function downloadActiveProfile() {
             carData.can_filters = Array.from(grouped.values());
         }
 
-        // 5. Construct Final JSON and Download
+        // 5. Capture Standard PIDs
+        const std_pids = [];
+        document.querySelectorAll('.std-pid-entry').forEach(entry => {
+            std_pids.push({
+                Name: entry.querySelector('.name-input')?.value || '',
+                ReceiveHeader: entry.querySelector('.receive-header-input')?.value || '',
+                Period: entry.querySelector('.period-input')?.value || '',
+                Type: entry.querySelector('.type-select')?.value || 'Default',
+                Send_to: entry.querySelector('.send-to-input')?.value || '',
+                enabled: entry.querySelector('.enabled-chk')?.checked !== false
+            });
+        });
+
+        // 6. Capture User Custom PIDs
+        const custom_pids = [];
+        document.querySelectorAll('.pid-entry').forEach(entry => {
+            custom_pids.push({
+                Name: entry.querySelector('.name-input')?.value || '',
+                Init: entry.querySelector('.init-input')?.value || '',
+                PID: entry.querySelector('.pid-input')?.value || '',
+                Expression: entry.querySelector('.expression-input')?.value || '',
+                Unit: entry.querySelector('.unit-input')?.value || '',
+                Class: entry.querySelector('.class-input')?.value || '',
+                MinValue: entry.querySelector('.min-value-input')?.value || '',
+                MaxValue: entry.querySelector('.max-value-input')?.value || '',
+                Period: entry.querySelector('.period-input')?.value || '',
+                Type: entry.querySelector('.type-select')?.value || 'Default',
+                Send_to: entry.querySelector('.send-to-input')?.value || '',
+                enabled: entry.querySelector('.enabled-chk')?.checked !== false
+            });
+        });
+
+        // 7. Capture User Custom CAN Filters
+        const custom_can_filters = [];
+        const customFilterEntries = document.querySelectorAll('.custom-canfilter-entry');
+        if (customFilterEntries.length > 0) {
+            const groupedCustom = new Map();
+            customFilterEntries.forEach(entry => {
+                const fidRaw = entry.querySelector('.frame-id-input')?.value || '';
+                let frameIdOut = fidRaw;
+                if (typeof normalizeFrameIdInputToNumber === 'function') {
+                    const fidNum = normalizeFrameIdInputToNumber(fidRaw);
+                    frameIdOut = (fidNum !== null) ? fidNum : String(fidRaw).trim();
+                }
+                if (!frameIdOut) return;
+
+                const key = String(frameIdOut).toLowerCase();
+                if (!groupedCustom.has(key)) groupedCustom.set(key, { frame_id: frameIdOut, parameters: [] });
+
+                groupedCustom.get(key).parameters.push({
+                    name: entry.querySelector('.name-input')?.value || '',
+                    expression: entry.querySelector('.expression-input')?.value || '',
+                    unit: entry.querySelector('.unit-input')?.value || '',
+                    class: entry.querySelector('.class-input')?.value || '',
+                    period: entry.querySelector('.period-input')?.value || '',
+                    min: entry.querySelector('.min-input')?.value || '',
+                    max: entry.querySelector('.max-input')?.value || '',
+                    type: entry.querySelector('.type-select')?.value || 'Default',
+                    send_to: entry.querySelector('.send-to-input')?.value || '',
+                    enabled: entry.querySelector('.enabled-chk')?.checked !== false
+                });
+            });
+            custom_can_filters.push(...Array.from(groupedCustom.values()));
+        }
+
+        // 8. Construct Final Unified JSON
         const exportObj = {
-            cars: [carData]
+            cars: [carData],
+            std_pids: std_pids,
+            pids: custom_pids,
+            can_filters: custom_can_filters
         };
 
         const dataStr = JSON.stringify(exportObj, null, 2);
@@ -6475,17 +6947,16 @@ function downloadActiveProfile() {
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         
-        // Clean filename
         const safeName = carModelValue.replace(/[^a-z0-9]/gi, '_').toLowerCase();
         link.href = url;
-        link.download = `profile_${safeName}.json`;
+        link.download = `wican_profile_${safeName}.json`;
         
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         window.URL.revokeObjectURL(url);
 
-        showNotification("Profile downloaded successfully", "green");
+        showNotification("Unified Profile downloaded successfully", "green");
 
     } catch (e) {
         console.error("Download failed:", e);

@@ -661,9 +661,9 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
         double result = 0;
         
         if (strcasecmp((const char *)expr, "RAW") == 0) {
-            is_raw = true;
-            uint8_t *data = bytes;
-            uint32_t data_len = bytes_len;
+            is_raw = true; 
+            uint8_t *data = parsed_elm_response.data;
+            uint32_t data_len = parsed_elm_response.length;
             
             if (data_len > 0) {
                 uint8_t total_dtcs = 0;

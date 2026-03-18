@@ -282,8 +282,16 @@ static void parse_parameter_object(parameter_t *out_param, const cJSON *param_ob
             // Fallback: Flat Structure (Old Format)
             curr_pid->parameters_count = 1;
             curr_pid->parameters = heap_caps_calloc(1, sizeof(parameter_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+            
+            // Try modern lowercase first
             parse_parameter_object(&curr_pid->parameters[0], pid, 
                 "name", "expression", "unit", "class", "sensor_type", "min", "max", "period", "send_to", "type");
+                
+            // Fallback to old uppercase if 'name' was not found
+            if (strcmp(curr_pid->parameters[0].name, "none") == 0) {
+                parse_parameter_object(&curr_pid->parameters[0], pid, 
+                    "Name", "Expression", "unit", "class", "sensor_type", "MinValue", "MaxValue", "Period", "Send_to", "Type");
+            }
         }
 
         // Initialize update mode for first parameter
@@ -431,6 +439,7 @@ static void parse_auto_pid_json(autopid_config_t *autopid_config, int *pid_index
     cJSON *pid_validation_item = cJSON_GetObjectItem(root, "pid_validation");
     cJSON *standard_pids_item = cJSON_GetObjectItem(root, "standard_pids");
     cJSON *specific_pids_item = cJSON_GetObjectItem(root, "car_specific");
+    cJSON *custom_pids_item = cJSON_GetObjectItem(root, "custom_pids");
     cJSON *can_filters_item = cJSON_GetObjectItem(root, "can_filters");
     cJSON *group_destination_item = cJSON_GetObjectItem(root, "destination");
     cJSON *group_dest_type_item = cJSON_GetObjectItem(root, "group_dest_type");
@@ -512,6 +521,21 @@ static void parse_auto_pid_json(autopid_config_t *autopid_config, int *pid_index
         if (cJSON_IsString(specific_pids_item) && specific_pids_item->valuestring) autopid_config->pid_specific_en = (strcmp(specific_pids_item->valuestring, "enable") == 0);
         else if (cJSON_IsBool(specific_pids_item)) autopid_config->pid_specific_en = cJSON_IsTrue(specific_pids_item);
     }
+
+    // Set custom PIDs toggle (defaults to true if missing for backward compatibility)
+    autopid_config->pid_custom_en = false;
+    if (custom_pids_item) {
+        if (cJSON_IsString(custom_pids_item) && custom_pids_item->valuestring) 
+            autopid_config->pid_custom_en = (strcmp(custom_pids_item->valuestring, "enable") == 0);
+        else if (cJSON_IsBool(custom_pids_item)) 
+            autopid_config->pid_custom_en = cJSON_IsTrue(custom_pids_item);
+    } else {
+        cJSON *fallback_pids = cJSON_GetObjectItem(root, "pids");
+        if (fallback_pids && cJSON_GetArraySize(fallback_pids) > 0) {
+            autopid_config->pid_custom_en = true;
+        }
+    }
+    
     
     autopid_config->pid_validation_en = true; 
     if (pid_validation_item) {
@@ -570,32 +594,56 @@ static void parse_auto_pid_json(autopid_config_t *autopid_config, int *pid_index
         }
     }
 
-    cJSON *pids = cJSON_GetObjectItem(root, "pids");
+cJSON *pids = cJSON_GetObjectItem(root, "pids");
     if (pids) {
         cJSON *pid;
         cJSON_ArrayForEach(pid, pids) {
             pid_data_t *curr_pid = &autopid_config->pids[idx];
-            cJSON *init_item2 = cJSON_GetObjectItem(pid, "Init");
-            cJSON *pid_item = cJSON_GetObjectItem(pid, "PID");
-            cJSON *period_item = cJSON_GetObjectItem(pid, "Period");
+            
+            // --- CASE INSENSITIVE FIX ---
+            cJSON *init_item2 = cJSON_GetObjectItem(pid, "init");
+            if (!init_item2) init_item2 = cJSON_GetObjectItem(pid, "Init");
+            
+            cJSON *pid_item = cJSON_GetObjectItem(pid, "pid");
+            if (!pid_item) pid_item = cJSON_GetObjectItem(pid, "PID");
+            
+            cJSON *period_item = cJSON_GetObjectItem(pid, "period");
+            if (!period_item) period_item = cJSON_GetObjectItem(pid, "Period");
+            
             cJSON *rxheader_item = cJSON_GetObjectItem(pid, "header");
+            if (!rxheader_item) rxheader_item = cJSON_GetObjectItem(pid, "ReceiveHeader");
+            
             cJSON *enabled_item = cJSON_GetObjectItem(pid, "enabled");
-            if (cJSON_GetArraySize(pids) > 0) autopid_config->pid_custom_en = true;
+            // ----------------------------
+
             curr_pid->cmd = pid_item ? (char *)heap_caps_malloc(strlen(pid_item->valuestring) + 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM) : NULL;
             if (curr_pid->cmd && pid_item && strlen(pid_item->valuestring) > 1) {
                 strcpy(curr_pid->cmd, pid_item->valuestring);
                 strcat(curr_pid->cmd, "\r");
             }
             curr_pid->init = (init_item2 && init_item2->valuestring) ? normalize_init_string(init_item2->valuestring) : NULL;
+            
             if (period_item && period_item->valuestring && strlen(period_item->valuestring) > 0) curr_pid->period = atoi(period_item->valuestring);
             else if (period_item && period_item->valueint) curr_pid->period = (uint32_t)period_item->valueint;
             else curr_pid->period = 10000;
+            
             curr_pid->rxheader = rxheader_item ? strdup_psram(rxheader_item->valuestring) : NULL;
             curr_pid->pid_type = PID_CUSTOM;
             curr_pid->enabled = (enabled_item && cJSON_IsBool(enabled_item)) ? cJSON_IsTrue(enabled_item) : true;
+            
             curr_pid->parameters_count = 1;
             curr_pid->parameters = (parameter_t *)heap_caps_calloc(1, sizeof(parameter_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-            if (curr_pid->parameters) parse_parameter_object(curr_pid->parameters, pid, "Name", "Expression", "unit", "class", "sensor_type", "MinValue", "MaxValue", "Period", "Send_to", "Type");
+            
+            // --- PARAMETER FALLBACK FIX ---
+            if (curr_pid->parameters) {
+                // Try modern lowercase first
+                parse_parameter_object(curr_pid->parameters, pid, "name", "expression", "unit", "class", "sensor_type", "min", "max", "period", "send_to", "type");
+                
+                // If 'name' resulted in "none", fallback to old uppercase format
+                if (strcmp(curr_pid->parameters->name, "none") == 0) {
+                    parse_parameter_object(curr_pid->parameters, pid, "Name", "Expression", "unit", "class", "sensor_type", "MinValue", "MaxValue", "Period", "Send_to", "Type");
+                }
+            }
             idx++;
         }
     }
@@ -614,8 +662,17 @@ static void parse_auto_pid_json(autopid_config_t *autopid_config, int *pid_index
             curr_pid->parameters_count = 1;
             curr_pid->parameters = (parameter_t *)heap_caps_calloc(1, sizeof(parameter_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
             if (curr_pid->parameters) {
-                cJSON *rxheader_item = cJSON_GetObjectItem(pid, "ReceiveHeader");
-                parse_parameter_object(curr_pid->parameters, pid, "Name", NULL, NULL, NULL, "sensor_type", NULL, NULL, "Period", "Send_to", "Type");
+                cJSON *rxheader_item = cJSON_GetObjectItem(pid, "header");
+                if (!rxheader_item) rxheader_item = cJSON_GetObjectItem(pid, "ReceiveHeader");
+                
+                // Try modern lowercase first
+                parse_parameter_object(curr_pid->parameters, pid, "name", NULL, NULL, NULL, "sensor_type", NULL, NULL, "period", "send_to", "type");
+                
+                // Fallback to old uppercase if 'name' was not found
+                if (strcmp(curr_pid->parameters->name, "none") == 0) {
+                    parse_parameter_object(curr_pid->parameters, pid, "Name", NULL, NULL, NULL, "sensor_type", NULL, NULL, "Period", "Send_to", "Type");
+                }
+                
                 if (curr_pid->parameters->period == 0) curr_pid->parameters->period = 10000;
                 curr_pid->parameters->min = FLT_MAX;
                 curr_pid->parameters->max = FLT_MAX;
@@ -694,8 +751,13 @@ static void parse_car_data_json(autopid_config_t *autopid_config, int *pid_index
                 cJSON *pid;
                 cJSON_ArrayForEach(pid, pids) {
                     pid_data_t *curr_pid = &autopid_config->pids[idx];
+                    
                     cJSON *pid_item = cJSON_GetObjectItem(pid, "pid");
+                    if (!pid_item) pid_item = cJSON_GetObjectItem(pid, "PID");
+                    
                     cJSON *pid_init_item = cJSON_GetObjectItem(pid, "pid_init");
+                    if (!pid_init_item) pid_init_item = cJSON_GetObjectItem(pid, "Init");
+                    
                     cJSON *enabled_item = cJSON_GetObjectItem(pid, "enabled");
 
                     curr_pid->enabled = (enabled_item && cJSON_IsBool(enabled_item)) ? cJSON_IsTrue(enabled_item) : true;
