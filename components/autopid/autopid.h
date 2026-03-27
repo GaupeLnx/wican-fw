@@ -125,6 +125,7 @@ typedef struct {
     uint32_t consecutive_errors;
     bool mqtt_active_flag;
     wc_timer_t mqtt_active_timer;   // <-- [NEW] Watchdog timer for MQTT activation
+    bool mqtt_timer_disabled;
 } pid_group_t;
 
 // HTTP(S) auth types supported by https_client_mgr_request_with_auth
@@ -263,7 +264,7 @@ esp_err_t autopid_get_protocol_number(int32_t *protocol_value);
 char *autopid_get_value_by_name(char* name);
 void autopid_publish_all_destinations(void);
 void autopid_app_reset_timer(void);
-void autopid_set_group_mqtt_state(const char* group_name, bool active_state);
+void autopid_set_group_mqtt_state(const char* group_name, bool active_state, uint32_t timeout_mins);
 
 void parse_elm327_response(char *buffer, response_t *response);
 

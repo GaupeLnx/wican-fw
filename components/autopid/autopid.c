@@ -3987,15 +3987,21 @@ static void autopid_task(void *pvParameters)
                     if (group->detection_method == DETECTION_VOLTAGE) {
                         active = dev_status_is_wake_voltage_ok();
                     } else if (group->detection_method == DETECTION_ADAPTIVE_RPM) {
-                        active = is_engine_running();
+                        active = is_engine_running();	
                     } else if (group->detection_method == DETECTION_MQTT) {
                        if (group->mqtt_active_flag) {
-                           if (wc_timer_is_expired(&group->mqtt_active_timer)) {
+                           // Check if the timer is enabled AND if it has expired
+                           if (!group->mqtt_timer_disabled && wc_timer_is_expired(&group->mqtt_active_timer)) {
                                group->mqtt_active_flag = false;
                                active = false;
-                           } else { active = true; }
-                       } else { active = false; }
-                    }	    
+                               ESP_LOGI(TAG, "Group '%s' MQTT timeout expired. Auto-disabling.", group->name);
+                           } else { 
+                               active = true; 
+                           }
+                       } else { 
+                           active = false; 
+                       }
+                    }    
 
                     if (!active) continue;
 
@@ -4397,8 +4403,8 @@ static void autopid_processing_task(void *pvParameters) {
     }
 }
 
-/* [NEW] Function to toggle a group's state via MQTT */
-void autopid_set_group_mqtt_state(const char* group_name, bool active_state) {
+/* [NEW] Function to toggle a group's state via MQTT with variable timeout */
+void autopid_set_group_mqtt_state(const char* group_name, bool active_state, uint32_t timeout_mins) {
     if (!autopid_config || !autopid_config->use_groups || !group_name) return;
     
     if (autopid_lock(100)) {
@@ -4408,12 +4414,21 @@ void autopid_set_group_mqtt_state(const char* group_name, bool active_state) {
                 
                 grp->mqtt_active_flag = active_state;
                 
-                /* [NEW] If turning ON, wind the 15-minute watchdog timer (900,000 ms) */
+                /* [NEW] Handle variable timeout */
                 if (active_state) {
-                    wc_timer_set(&grp->mqtt_active_timer, 900000); 
+                    if (timeout_mins == 0) {
+                        grp->mqtt_timer_disabled = true;
+                        ESP_LOGI(TAG, "Group '%s' MQTT state set to ACTIVE (Indefinite)", group_name);
+                    } else {
+                        grp->mqtt_timer_disabled = false;
+                        // Convert minutes to milliseconds
+                        wc_timer_set(&grp->mqtt_active_timer, timeout_mins * 60000); 
+                        ESP_LOGI(TAG, "Group '%s' MQTT state set to ACTIVE (Timeout: %lu mins)", group_name, timeout_mins);
+                    }
+                } else {
+                    ESP_LOGI(TAG, "Group '%s' MQTT state set to IDLE", group_name);
                 }
                 
-                ESP_LOGI(TAG, "Group '%s' MQTT state set to: %s", group_name, active_state ? "ACTIVE" : "IDLE");
                 break; // Found and updated
             }
         }

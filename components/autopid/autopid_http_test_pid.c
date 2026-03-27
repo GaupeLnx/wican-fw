@@ -732,6 +732,8 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "ok", ok);
         if (ok)
         {
+	    cJSON_AddStringToObject(root, "raw", autopid_test_pid_raw_get());
+	    
             if (is_raw && raw_str != NULL) {
                 cJSON_AddStringToObject(root, "value", raw_str);
             } else {

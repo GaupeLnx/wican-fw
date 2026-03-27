@@ -326,26 +326,35 @@ static void mqtt_parse_data(void *handler_args, esp_event_base_t base, int32_t e
             goto end;
         }
 
-        /* -------------------------------------------------------------
+         /* -------------------------------------------------------------
            [NEW] Handle the 'command' format for On-Demand Diagnostics 
-           (e.g., {"command": "set_group", "group_name": "PCM", "active": true})
+           (e.g., {"command": "set_group", "group_name": "PCM", "active": true, "timeout": 5})
            ------------------------------------------------------------- */
         cJSON *command = cJSON_GetObjectItem(root, "command");
         if (command && cJSON_IsString(command) && strcmp(command->valuestring, "set_group") == 0) 
         {
             cJSON *group_name = cJSON_GetObjectItem(root, "group_name");
             cJSON *active = cJSON_GetObjectItem(root, "active");
+            cJSON *timeout = cJSON_GetObjectItem(root, "timeout"); // <--- Extract timeout
 
             if (group_name && cJSON_IsString(group_name) && active && cJSON_IsBool(active)) {
                 bool is_active = cJSON_IsTrue(active);
-                ESP_LOGI(TAG, "MQTT Cmd: Setting group '%s' active: %d", group_name->valuestring, is_active);
                 
-                // Toggle the state in the AutoPID Engine
-                autopid_set_group_mqtt_state(group_name->valuestring, is_active);
+                // Default to 15 minutes if not provided or invalid
+                uint32_t timeout_mins = 15; 
+                if (timeout && cJSON_IsNumber(timeout)) {
+                    timeout_mins = (uint32_t)timeout->valueint;
+                }
 
-                // Send an acknowledgment back to HA
-                snprintf(cmd_response, sizeof(cmd_response), "{\"group\": \"%s\", \"active\": %s}", 
-                         group_name->valuestring, is_active ? "true" : "false");
+                ESP_LOGI(TAG, "MQTT Cmd: Setting group '%s' active: %d with timeout: %lu mins", 
+                         group_name->valuestring, is_active, timeout_mins);
+                
+                // Toggle the state in the AutoPID Engine (Now passing timeout)
+                autopid_set_group_mqtt_state(group_name->valuestring, is_active, timeout_mins);
+
+                // Send an acknowledgment back to HA, including the timeout used
+                snprintf(cmd_response, sizeof(cmd_response), "{\"group\": \"%s\", \"active\": %s, \"timeout\": %lu}", 
+                         group_name->valuestring, is_active ? "true" : "false", timeout_mins);
                 mqtt_publish(mqtt_rsp_topic, cmd_response, strlen(cmd_response), 0, 0);
             } else {
                 ESP_LOGE(TAG, "MQTT Cmd: set_group missing 'group_name' or 'active' boolean");
