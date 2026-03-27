@@ -2342,12 +2342,12 @@ esp_err_t elm327_sleep(void)
 		rtc_gpio_pulldown_en(OBD_SLEEP_PIN);
 		gpio_hold_en(OBD_SLEEP_PIN);
 
-		
-		gpio_sleep_set_pull_mode(OBD_READY_PIN, GPIO_PULLDOWN_ONLY);
-		rtc_gpio_pulldown_en(OBD_READY_PIN);
-		gpio_pulldown_en(OBD_READY_PIN);
-		gpio_hold_en(OBD_READY_PIN);
-		gpio_deep_sleep_hold_en();
+		// Commented out, will not let the ELM327 sleep
+		// gpio_sleep_set_pull_mode(OBD_READY_PIN, GPIO_PULLDOWN_ONLY);
+		// rtc_gpio_pulldown_en(OBD_READY_PIN);
+		// gpio_pulldown_en(OBD_READY_PIN);
+		// gpio_hold_en(OBD_READY_PIN);
+		// gpio_deep_sleep_hold_en();
 
 		// xQueueReset(uart1_queue);
 		xSemaphoreGive(xuart1_semaphore);

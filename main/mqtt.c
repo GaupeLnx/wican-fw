@@ -467,7 +467,15 @@ static void mqtt_task(void *pvParameters)
         // FIX: Increased timeout to 10ms to stop starving the CPU
         if (xQueueReceive(*xmqtt_tx_queue, (void *)&tx_frame, pdMS_TO_TICKS(10)) == pdPASS)
         {
-            dev_status_wait_for_bits(DEV_AWAKE_BIT, portMAX_DELAY);
+	  // dev_status_wait_for_bits(DEV_AWAKE_BIT, portMAX_DELAY);
+          // kww added below
+
+            // Safely wait for the device to wake up, checking in with the watchdog every 1 second.
+            while (!dev_status_is_bit_set(DEV_AWAKE_BIT)) {
+                vTaskDelay(pdMS_TO_TICKS(1000)); 
+                esp_task_wdt_reset(); 
+            }
+	    // kww added above stop
             
             if(mqtt_connected())
             {

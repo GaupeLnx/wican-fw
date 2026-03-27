@@ -856,7 +856,9 @@ void light_sleep_task(void *pvParameters)
 	// {
     //     wakeup_voltage = 13.4f;
     // }
-    wakeup_voltage = sleep_voltage + 0.1f;
+    
+    // Change the 0.1f to 0.3f to require a definitive voltage jump (e.g., alternator turning on)    
+    wakeup_voltage = sleep_voltage + 0.3f;
     
 	if(config_server_get_sleep_time(&sleep_time) == -1)
 	{
@@ -974,7 +976,8 @@ void light_sleep_task(void *pvParameters)
 					{
                         ESP_LOGI(TAG, "Voltage above wakeup threshold, starting wakeup timer");
                         current_state = STATE_WAKE_PENDING;
-                        wc_timer_set(&wakeup_timer, 1000); // 2 second timer for stable voltage
+                        // INCREASE this to 5000ms so it survives the 2-second sleep loops
+                        wc_timer_set(&wakeup_timer, 5000);
                     }
                     else if(battery_voltage > CRITICAL_VOLTAGE && periodic_wakeup && wc_timer_is_expired(&periodic_wakeup_timer))
                     {
@@ -1047,10 +1050,12 @@ void light_sleep_task(void *pvParameters)
                     elm327_hardreset_chip();
                     vTaskDelay(pdMS_TO_TICKS(500));
                     elm327_sleep();
-                    gpio_hold_en(OBD_READY_PIN);
-                    rtc_gpio_hold_en(OBD_READY_PIN);
-                    rtc_gpio_pulldown_en(OBD_READY_PIN);
-                    gpio_deep_sleep_hold_en();
+		    
+		    // comment out below to allow ELM327 chip to sleep
+                    // gpio_hold_en(OBD_READY_PIN);
+                    // rtc_gpio_hold_en(OBD_READY_PIN);
+                    // rtc_gpio_pulldown_en(OBD_READY_PIN);
+                    // gpio_deep_sleep_hold_en();
                     
                     vTaskDelay(pdMS_TO_TICKS(100));
                     elm327_sleep_retries++;
