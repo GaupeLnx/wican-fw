@@ -612,6 +612,8 @@ static adc_cali_handle_t cali_handle = NULL;
 static bool do_calibration = false;
 static QueueHandle_t voltage_queue = NULL;
 static QueueHandle_t sleep_state_queue = NULL;
+static int64_t sleep_target_time_us = 0; // --- NEW: Tracks exact absolute sleep time
+
 // Static queue storage for voltage_queue (queue length = 1, item size = sizeof(float))
 static StaticQueue_t voltage_queue_struct;
 static uint8_t voltage_queue_storage[sizeof(float)];
@@ -843,7 +845,8 @@ void light_sleep_task(void *pvParameters)
 	static uint32_t sleep_time;
 	static int8_t periodic_wakeup;
 	static uint32_t wakeup_interval;
-	static wc_timer_t periodic_wakeup_timer;
+	// static wc_timer_t periodic_wakeup_timer;
+    static int64_t periodic_wakeup_target_us = 0;
 
     // Initialize configuration
     sleep_en = config_server_get_sleep_config();
@@ -903,6 +906,12 @@ void light_sleep_task(void *pvParameters)
 
     // Initialize voltage read timer
     wc_timer_set(&voltage_read_timer, 10);
+
+    // Keep the FAST domain powered to prevent the 17.5MHz clock from falling back to the RC oscillator
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RC_FAST, ESP_PD_OPTION_ON);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_XTAL, ESP_PD_OPTION_ON);
+    
+    
     vTaskDelay(pdMS_TO_TICKS(1000));
     while (1) 
 	{
@@ -938,6 +947,8 @@ void light_sleep_task(void *pvParameters)
                         ESP_LOGW(TAG, "Battery voltage low (%.2fV), starting low voltage timer", battery_voltage);
                         current_state = STATE_LOW_VOLTAGE;
                         wc_timer_set(&sleep_timer, sleep_time);
+			// --- NEW: Calculate exact hardware time when sleep should trigger
+                        sleep_target_time_us = esp_timer_get_time() + ((int64_t)sleep_time * 1000ULL);
                     }
                     break;
 
@@ -964,10 +975,16 @@ void light_sleep_task(void *pvParameters)
                         state_info.voltage = battery_voltage;
                         xQueueOverwrite(sleep_state_queue, &state_info);
                         vTaskDelay(pdMS_TO_TICKS(1000));
+			// use HW timer
+                        // if(periodic_wakeup)
+                        //{
+                        //    wc_timer_set(&periodic_wakeup_timer, wakeup_interval);
+                        //}
                         if(periodic_wakeup)
                         {
-                            wc_timer_set(&periodic_wakeup_timer, wakeup_interval);
-                        }
+                            // wakeup_interval is in ms, multiply by 1000 for microseconds
+                            periodic_wakeup_target_us = esp_timer_get_time() + ((int64_t)wakeup_interval * 1000ULL);
+                        }			
                     }
                     break;
 
@@ -979,7 +996,9 @@ void light_sleep_task(void *pvParameters)
                         // INCREASE this to 5000ms so it survives the 2-second sleep loops
                         wc_timer_set(&wakeup_timer, 5000);
                     }
-                    else if(battery_voltage > CRITICAL_VOLTAGE && periodic_wakeup && wc_timer_is_expired(&periodic_wakeup_timer))
+		    // Use HW base timer
+                    // else if(battery_voltage > CRITICAL_VOLTAGE && periodic_wakeup && wc_timer_is_expired(&periodic_wakeup_timer))
+                    else if(battery_voltage > CRITICAL_VOLTAGE && periodic_wakeup && (esp_timer_get_time() >= periodic_wakeup_target_us))		    
                     {
                         ESP_LOGI(TAG, "Periodic wakeup timer expired, returning to normal mode");
                         // current_state = STATE_NORMAL;
@@ -1035,8 +1054,13 @@ void light_sleep_task(void *pvParameters)
             static wc_timer_t waketime = 0;
             ESP_LOGW(TAG, "Sleep...");
             ESP_LOGW(TAG, "Wake time: %lld", (esp_timer_get_time()-waketime)/1000);
+
+            // We DO NOT use locks on the very first pass. Let it sleep.
+            // If the ELM327 wakes up, the retry block below catches it and locks it down permanently.
+            // kww test replace with 
             esp_sleep_enable_timer_wakeup(2*1000000);
             esp_light_sleep_start();
+	    
             waketime = esp_timer_get_time();
             ESP_LOGW(TAG, "Wakeup...");
 
@@ -1045,26 +1069,37 @@ void light_sleep_task(void *pvParameters)
             if(elm327_chip_get_status() == ELM327_READY)
             {
                 ESP_LOGW(TAG, "ELM327 chip is NOT sleeping after wakeup, retrying... (%u/6)", elm327_sleep_retries);
-                if(elm327_sleep_retries < 6)
+                if(elm327_sleep_retries < 10)
                 {
                     elm327_hardreset_chip();
                     vTaskDelay(pdMS_TO_TICKS(500));
                     elm327_sleep();
-		    
-		    // comment out below to allow ELM327 chip to sleep
-                    // gpio_hold_en(OBD_READY_PIN);
-                    // rtc_gpio_hold_en(OBD_READY_PIN);
-                    // rtc_gpio_pulldown_en(OBD_READY_PIN);
-                    // gpio_deep_sleep_hold_en();
                     
-                    vTaskDelay(pdMS_TO_TICKS(100));
+                    // --- THE GOLDEN KEY: Wait for the ELM327 to actually fall asleep! ---
+                    vTaskDelay(pdMS_TO_TICKS(100)); 
+                    
+                    // --- THE DEVELOPER'S HACK: Permanently lock the pins down ---
+                    // By never unlocking them, we prevent the UART glitch and trick the 
+                    // ESP32 into reading the latched '0' on all future 2-second wakeups.
+                    gpio_sleep_set_pull_mode(OBD_READY_PIN, GPIO_PULLDOWN_ONLY);
+                    rtc_gpio_pulldown_en(OBD_READY_PIN);
+                    gpio_pulldown_en(OBD_READY_PIN);
+                    rtc_gpio_hold_en(OBD_READY_PIN);
+                    gpio_hold_en(OBD_READY_PIN);
+                    gpio_deep_sleep_hold_en();
+                    
                     elm327_sleep_retries++;
                 }
                 else
                 {
                     ESP_LOGE(TAG, "ELM327 chip is still NOT sleeping after 6 retries, restarting...");
                     vTaskDelay(pdMS_TO_TICKS(100));
-                    esp_restart();
+                    // kww keep the WiCAN asleep if vehicle wakes the bus
+		    esp_restart();
+
+                    // Reset the counter so it can try again on the next 2-second wakeup.
+                    // DO NOT call esp_restart() here. 
+                    //elm327_sleep_retries = 0;		    
                 }
                 if(elm327_chip_get_status() == ELM327_SLEEP)
                 {
@@ -1076,6 +1111,7 @@ void light_sleep_task(void *pvParameters)
                 elm327_sleep_retries = 0;
             }
         }
+
         if(current_state != STATE_SLEEPING)
         {
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1186,6 +1222,25 @@ void sleep_mode_init(void)
             return;
         }
 	}
+}
+
+// --- NEW: Function to get remaining sleep time in seconds for the Web UI ---
+int32_t sleep_mode_get_time_to_sleep_sec(void)
+{
+    sleep_state_info_t state_info;
+    if (sleep_mode_get_state(&state_info) == ESP_OK) 
+    {
+        // Only count down if we are actively waiting to go to sleep
+        if (state_info.state == STATE_LOW_VOLTAGE) 
+        {
+            int64_t remaining_us = sleep_target_time_us - esp_timer_get_time();
+            if (remaining_us > 0) {
+                return (int32_t)(remaining_us / 1000000ULL);
+            }
+            return 0;
+        }
+    }
+    return -1; // -1 indicates the timer is not currently running
 }
 
 #endif

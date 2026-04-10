@@ -46,6 +46,7 @@ void sleep_mode_init(void);
 esp_err_t sleep_mode_get_voltage(float *val);
 esp_err_t sleep_mode_get_state(sleep_state_info_t *state_info);
 void sleep_mode_print_wakeup_reason(void);
+int32_t sleep_mode_get_time_to_sleep_sec(void);
 
 #endif
 

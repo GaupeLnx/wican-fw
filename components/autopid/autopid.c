@@ -2943,6 +2943,106 @@ static void send_commands(char *commands, uint32_t delay_ms)
 
 //////////////////
 
+
+
+char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len) {
+    if (!data || data_len == 0) return NULL;
+
+    // 1. Quick scan to see if it's a Mode 03 (DTC) response
+    bool is_mode_03 = false;
+    for (uint32_t i = 0; i < data_len; i++) {
+        if (data[i] == 0x43 && (i + 1) < data_len) {
+            is_mode_03 = true;
+            break;
+        }
+    }
+    
+    // 2. If it IS a DTC, run the formatting
+    if (is_mode_03) {
+        uint8_t total_dtcs = 0;
+        uint8_t dtc_buffer[128]; 
+        int dtc_idx = 0;
+
+        for (uint32_t i = 0; i < data_len; i++) {
+            if (data[i] == 0x43 && (i + 1) < data_len) {
+                uint8_t count = data[i+1];
+                total_dtcs += count;
+                int dtc_bytes = count * 2; 
+                
+                if ((i + 1 + dtc_bytes < data_len) && (dtc_idx + dtc_bytes < sizeof(dtc_buffer))) {
+                    for (int j = 0; j < dtc_bytes; j++) {
+                        dtc_buffer[dtc_idx++] = data[i + 2 + j];
+                    }
+                    i += 1 + dtc_bytes; 
+                }
+            }
+        }
+
+        char *master_string = heap_caps_malloc(4 + (dtc_idx * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+        if (master_string) {
+            sprintf(master_string, "43%02X", total_dtcs);
+            for (int b = 0; b < dtc_idx; b++) {
+                sprintf(&master_string[4 + (b * 2)], "%02X", dtc_buffer[b]);
+            }
+            return master_string;
+        }
+    }
+    
+    // 3. UNIVERSAL RAW DUMP (Mode 22, ISO-TP, etc.)
+    else {
+        // --- THE ISO-TP CLEANER ---
+        if (data_len > 8 && data[0] == 0x10) {
+            uint8_t clean_data[256]; // Ensures buffer is large enough
+            uint32_t clean_len = 0;
+            uint32_t i = 2; // Skip byte 0 (0x10 First Frame) and byte 1 (Length)
+            
+            // Read the data payload of the first frame (up to 6 bytes)
+            while (i < 8 && i < data_len && clean_len < sizeof(clean_data)) {
+                clean_data[clean_len++] = data[i++];
+            }
+            
+            // Read the consecutive frames
+            while (i < data_len && clean_len < sizeof(clean_data)) {
+                // Check if the current byte is a sequence byte (0x21, 0x22, etc.)
+                if ((data[i] & 0xF0) == 0x20) { 
+                    i++; // Skip the sequence byte!
+                    
+                    // The next 7 bytes are pure data
+                    uint32_t chunk_end = i + 7; 
+                    while (i < chunk_end && i < data_len && clean_len < sizeof(clean_data)) {
+                        clean_data[clean_len++] = data[i++];
+                    }
+                } else {
+                    // Fallback just in case formatting is misaligned
+                    clean_data[clean_len++] = data[i++];
+                }
+            }
+            
+            // Convert the beautifully cleaned array into a Hex String
+            char *master_string = heap_caps_malloc((clean_len * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+            if (master_string) {
+                for (uint32_t j = 0; j < clean_len; j++) {
+                    sprintf(&master_string[j * 2], "%02X", clean_data[j]);
+                }
+                return master_string;
+            }
+        } 
+        // --- STANDARD SINGLE-FRAME DUMP ---
+        else {
+            char *master_string = heap_caps_malloc((data_len * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+            if (master_string) {
+                for (uint32_t i = 0; i < data_len; i++) {
+                    sprintf(&master_string[i * 2], "%02X", data[i]);
+                }
+                return master_string;
+            }
+        }
+    }
+    
+    return NULL; // Return NULL if allocation or parsing fails
+}
+
+
 static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
     if (!curr_pid || !param) return;
 
@@ -2989,60 +3089,30 @@ static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
 
                     if (curr_pid->pid_type == PID_CUSTOM || curr_pid->pid_type == PID_SPECIFIC) {
 
+		      // If the user specfici RAW in the expression field, then just send
+		      // all the 
                         if (param->expression && strcasecmp(param->expression, "RAW") == 0) {
-                            
-                            uint8_t *data = elm327_response.data;
-                            uint32_t data_len = elm327_response.length;
-                            
-                            if (data_len > 0) {
-                                uint8_t total_dtcs = 0;
-                                uint8_t dtc_buffer[128]; // Buffer to hold up to 64 combined codes
-                                int dtc_idx = 0;
-
-                                // Scan the raw CAN bytes from all responding ECUs
-                                for (uint32_t i = 0; i < data_len; i++) {
-                                    
-                                    // Find the Mode 03 response header (0x43)
-                                    if (data[i] == 0x43 && (i + 1) < data_len) {
-                                        uint8_t count = data[i+1];
-                                        total_dtcs += count;
-                                        
-                                        int dtc_bytes = count * 2; // 2 bytes per code
-                                        
-                                        // Safety check to prevent buffer overflow
-                                        if ((i + 1 + dtc_bytes < data_len) && (dtc_idx + dtc_bytes < sizeof(dtc_buffer))) {
-                                            // Copy the DTC bytes into our master buffer
-                                            for (int j = 0; j < dtc_bytes; j++) {
-                                                dtc_buffer[dtc_idx++] = data[i + 2 + j];
-                                            }
-                                            // Skip the index past these codes so we don't accidentally 
-                                            // mistake a DTC byte for a new 0x43 header
-                                            i += 1 + dtc_bytes; 
-                                        }
-                                    }
-                                }
-
-                                if (param->raw_string_value) free(param->raw_string_value);
-                                
-                                // Allocate memory: 4 chars for "43" and "XX" (count), + 2 chars per DTC byte, + 1 null terminator
-                                param->raw_string_value = heap_caps_malloc(4 + (dtc_idx * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-                                
-                                if (param->raw_string_value) {
-                                    // Write the master header and the combined total count
-                                    sprintf(param->raw_string_value, "43%02X", total_dtcs);
-                                    
-                                    // Append all the collected codes from all ECUs
-                                    for (int b = 0; b < dtc_idx; b++) {
-                                        sprintf(&param->raw_string_value[4 + (b * 2)], "%02X", dtc_buffer[b]);
-                                    }
-                                    
-                                    param->failed = false;
-                                    autopid_config->last_successful_pid_time = time(NULL);
-                                    publish_parameter_mqtt(param);
-                                }
+                           
+                            // Free old memory to prevent leaks
+                            if (param->raw_string_value) {
+                                free(param->raw_string_value);
+                                param->raw_string_value = NULL;
                             }
+                            
+                            // Call our shiny new universal function!
+                            param->raw_string_value = autopid_process_raw_expression(elm327_response.data, elm327_response.length);
+                            
+                            if (param->raw_string_value) {
+                                param->failed = false;
+                                autopid_config->last_successful_pid_time = time(NULL);
+                                publish_parameter_mqtt(param);
+                            } else {
+                                param->failed = true;
+                                ESP_LOGE(TAG, "RAW expression processing failed or out of memory");
+                            }
+                            
                         } else {
-                            // ---> NORMAL MATH EVALUATION LOGIC <---
+                            // ---> NORMAL MATH EVALUATION LOGIC <---               
                             if (evaluate_expression((uint8_t *)param->expression, (uint8_t *)elm327_response.data, 0, &result)) {
                                 if (param->min != FLT_MAX && result < param->min) {
                                     // Out of bounds, skip

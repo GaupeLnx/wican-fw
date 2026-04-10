@@ -3248,7 +3248,40 @@ function checkStatus() {
         }
         document.getElementById("obd_chip_status").innerHTML = obj.obd_chip_status || "N/A";
         document.getElementById("uptime").innerHTML = obj.uptime || "N/A";
+
+        // --- NEW: Live Time to Sleep Countdown ---
+        const ttsEl = document.getElementById("time_to_sleep");
+        if (ttsEl) {
+            // Clear any existing countdown so they don't overlap if the user clicks "Check Status" multiple times
+            if (window.sleepTimerInterval) clearInterval(window.sleepTimerInterval);
+            
+            // Check if the backend provided the remaining seconds
+            if (obj.time_to_sleep_sec !== undefined && obj.time_to_sleep_sec > 0) {
+                let remain = parseInt(obj.time_to_sleep_sec);
+                
+                const updateTTS = () => {
+                    if (remain <= 0) {
+                        ttsEl.innerHTML = "Sleeping soon...";
+                        clearInterval(window.sleepTimerInterval);
+                    } else {
+                        const m = Math.floor(remain / 60);
+                        const s = remain % 60;
+                        ttsEl.innerHTML = `${m}m ${s}s`;
+                        remain--;
+                    }
+                };
+                
+                updateTTS(); // Call immediately to avoid a 1-second delay
+                window.sleepTimerInterval = setInterval(updateTTS, 1000);
+            } else {
+                // Fallback if sleep is disabled or data is missing
+                ttsEl.innerHTML = obj.time_to_sleep || "N/A";
+            }
+        }
+        // -----------------------------------------
+
         checkFirmwareUpdate();
+
     };
     xhttp.open("GET", "/check_status");
     xhttp.send();

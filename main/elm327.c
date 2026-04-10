@@ -2314,49 +2314,46 @@ esp_err_t elm327_sleep(void)
 {
     static char rsp_buffer[100];
     uint32_t rsp_len;
-	esp_err_t ret = ESP_FAIL;
+    esp_err_t ret = ESP_FAIL;
 
-	if (xSemaphoreTake(xuart1_semaphore, pdMS_TO_TICKS(ELM327_CMD_MUTEX_TIMOUT)) == pdTRUE)
-	{
-		ESP_LOGI(TAG, "Got semaphore, preparing to sleep");
-		uart_flush_input(UART_NUM_1);
-		xQueueReset(uart1_queue);
+    if (xSemaphoreTake(xuart1_semaphore, pdMS_TO_TICKS(ELM327_CMD_MUTEX_TIMOUT)) == pdTRUE)
+    {
+        ESP_LOGI(TAG, "Got semaphore, preparing to sleep");
+        uart_flush_input(UART_NUM_1);
+        xQueueReset(uart1_queue);
         elm327_uart_write_bytes(UART_NUM_1, "STSLEEP0\r", strlen("STSLEEP0\r"));
         int len = uart_read_until_pattern(UART_NUM_1, rsp_buffer, sizeof(rsp_buffer), "\r>", UART_TIMEOUT_MS+300);
-		if(len > 0 && strstr(rsp_buffer, "OK\r\r>"))
-		{
-			printf("Sleep OK\r\n");
-			ESP_LOGW(TAG, "Sleep OK");
-			ret = ESP_OK;
-		}
-		else
-		{
-			ESP_LOGE(TAG, "%s: Sleep failed", __func__);
-			ret = ESP_FAIL;
-		}
-		uart_flush_input(UART_NUM_1);
+        if(len > 0 && strstr(rsp_buffer, "OK\r\r>"))
+        {
+            printf("Sleep OK\r\n");
+            ESP_LOGW(TAG, "Sleep OK");
+            ret = ESP_OK;
+        }
+        else
+        {
+            ESP_LOGE(TAG, "%s: Sleep failed", __func__);
+            ret = ESP_FAIL;
+        }
+        uart_flush_input(UART_NUM_1);
 
-		gpio_sleep_set_pull_mode(OBD_SLEEP_PIN, GPIO_PULLDOWN_ONLY);
-		gpio_set_level(OBD_SLEEP_PIN, 0);
-		gpio_pulldown_en(OBD_SLEEP_PIN);
-		rtc_gpio_pulldown_en(OBD_SLEEP_PIN);
-		gpio_hold_en(OBD_SLEEP_PIN);
+        // Lock the OBD Sleep Pin down
+        gpio_sleep_set_pull_mode(OBD_SLEEP_PIN, GPIO_PULLDOWN_ONLY);
+        gpio_set_level(OBD_SLEEP_PIN, 0);
+        gpio_pulldown_en(OBD_SLEEP_PIN);
+        rtc_gpio_pulldown_en(OBD_SLEEP_PIN);
+        gpio_hold_en(OBD_SLEEP_PIN);
 
-		// Commented out, will not let the ELM327 sleep
-		// gpio_sleep_set_pull_mode(OBD_READY_PIN, GPIO_PULLDOWN_ONLY);
-		// rtc_gpio_pulldown_en(OBD_READY_PIN);
-		// gpio_pulldown_en(OBD_READY_PIN);
-		// gpio_hold_en(OBD_READY_PIN);
-		// gpio_deep_sleep_hold_en();
+        // --- THE FIX: Restore this line so the OBD_SLEEP_PIN lock survives Deep Sleep! ---
+        gpio_deep_sleep_hold_en();
 
-		// xQueueReset(uart1_queue);
-		xSemaphoreGive(xuart1_semaphore);
-	}
-	else
-	{
-		ESP_LOGE(TAG, "%s: Failed to take semaphore", __func__);
-	}
-	return ret;
+        // xQueueReset(uart1_queue);
+        xSemaphoreGive(xuart1_semaphore);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "%s: Failed to take semaphore", __func__);
+    }
+    return ret;
 }
 
 static bool is_hex_char(char c)
@@ -3458,8 +3455,12 @@ void elm327_init(response_callback_t rsp_callback, QueueHandle_t *rx_queue, void
     uart_param_config(UART_NUM_1, &uart1_config);
     uart_set_pin(UART_NUM_1, GPIO_NUM_16, GPIO_NUM_15, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-	vTaskDelay(pdMS_TO_TICKS(50));
-	elm327_hardreset_chip();
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // --- NEW: Drop any lingering deep sleep hardware locks from the previous sleep cycle! ---
+    gpio_deep_sleep_hold_dis();
+	
+    elm327_hardreset_chip();
 
 	// elm327_update_obd_from_file("/sdcard/MIC3624_v2.3.07.beta4.txt");
 	// elm327_update_obd_from_file("/sdcard/MIC3624_v2.3.10.txt");

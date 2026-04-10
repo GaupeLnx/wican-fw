@@ -265,6 +265,9 @@ char *autopid_get_value_by_name(char* name);
 void autopid_publish_all_destinations(void);
 void autopid_app_reset_timer(void);
 void autopid_set_group_mqtt_state(const char* group_name, bool active_state, uint32_t timeout_mins);
+// Process a raw ELM327 response array (DTCs or ISO-TP) into a dynamic hex string.
+// Note: The caller is responsible for freeing the returned string.
+char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len);
 
 void parse_elm327_response(char *buffer, response_t *response);
 

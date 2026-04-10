@@ -1805,6 +1805,10 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	{
 		cJSON_AddStringToObject(root, "obd_chip_status", "Ready");
 	}
+
+        // --- NEW: Add the live sleep countdown to the JSON payload ---
+	cJSON_AddNumberToObject(root, "time_to_sleep_sec", sleep_mode_get_time_to_sleep_sec());
+	
 	char uptime_str[32];
 	dev_status_format_uptime(uptime_str, sizeof(uptime_str));
 	if(uptime_str[0] == '\0')

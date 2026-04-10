@@ -662,43 +662,18 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
         
         if (strcasecmp((const char *)expr, "RAW") == 0) {
             is_raw = true; 
-            uint8_t *data = parsed_elm_response.data;
-            uint32_t data_len = parsed_elm_response.length;
             
-            if (data_len > 0) {
-                uint8_t total_dtcs = 0;
-                uint8_t dtc_buffer[128]; 
-                int dtc_idx = 0;
-
-                for (uint32_t i = 0; i < data_len; i++) {
-                    if (data[i] == 0x43 && (i + 1) < data_len) {
-
-		      uint8_t count = data[i+1];
-                        total_dtcs += count;
-                        int dtc_bytes = count * 2; 
-                        
-                        if ((i + 1 + dtc_bytes < data_len) && (dtc_idx + dtc_bytes < sizeof(dtc_buffer))) {
-                            for (int j = 0; j < dtc_bytes; j++) {
-                                dtc_buffer[dtc_idx++] = data[i + 2 + j];
-                            }
-                            i += 1 + dtc_bytes; 
-                        }
-                    }
-                }
-        
-                char *master_string = heap_caps_malloc(4 + (dtc_idx * 2) + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-                if (master_string) {
-                    sprintf(master_string, "43%02X", total_dtcs);
-                    
-                    for (int b = 0; b < dtc_idx; b++) {
-                        sprintf(&master_string[4 + (b * 2)], "%02X", dtc_buffer[b]);
-                    }
-                    
-                    raw_str = master_string;
-                    ok = true; // Tell the system our RAW command was successful!
-                }
+            // DITCH the 'bytes' buffer and use the raw, unfiltered concatenated array!
+            raw_str = autopid_process_raw_expression(parsed_elm_response.data, parsed_elm_response.length);
+            
+            if (raw_str) {
+                ok = true; // Tell the Web UI it worked!
+            } else {
+                ok = false;
+                snprintf(err_msg, sizeof(err_msg), "RAW string generation failed");
             }
         }       
+      
         else if (evaluate_expression((uint8_t *)expr, (uint8_t *)padded_eval_buf, 0, &result))
         {
             result = round(result * 100.0) / 100.0;
