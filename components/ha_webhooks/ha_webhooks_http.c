@@ -40,6 +40,84 @@ static bool url_is_http(const char *url)
     return strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0;
 }
 
+static bool url_is_plain_http(const char *url)
+{
+    if (!url)
+        return false;
+    return strncmp(url, "http://", 7) == 0;
+}
+
+#if HA_WEBHOOK_MAX_URLS > 0
+static void clear_config_urls(ha_webhook_config_t *cfg)
+{
+    if (!cfg)
+        return;
+
+    for (size_t i = 0; i < HA_WEBHOOK_MAX_URLS; ++i)
+        cfg->urls[i][0] = '\0';
+    cfg->url_count = 0;
+}
+
+static bool webhook_urls_equal(const ha_webhook_config_t *a, const ha_webhook_config_t *b)
+{
+    if (!a || !b)
+        return false;
+    if (a->url_count != b->url_count)
+        return false;
+
+    for (size_t i = 0; i < a->url_count && i < HA_WEBHOOK_MAX_URLS; ++i)
+    {
+        if (strcmp(a->urls[i], b->urls[i]) != 0)
+            return false;
+    }
+    return true;
+}
+
+static void add_urls_to_response(cJSON *resp, const ha_webhook_config_t *cfg)
+{
+    if (!resp || !cfg || cfg->url_count == 0)
+        return;
+
+    cJSON *urls = cJSON_AddArrayToObject(resp, "urls");
+    if (!urls)
+        return;
+
+    for (size_t i = 0; i < cfg->url_count && i < HA_WEBHOOK_MAX_URLS; ++i)
+    {
+        if (cfg->urls[i][0] == '\0')
+            continue;
+        cJSON_AddItemToArray(urls, cJSON_CreateString(cfg->urls[i]));
+    }
+}
+#endif
+
+static cJSON *create_webhook_response(const ha_webhook_config_t *cfg)
+{
+    if (!cfg)
+        return NULL;
+
+    cJSON *resp = cJSON_CreateObject();
+    if (!resp)
+        return NULL;
+
+    cJSON_AddStringToObject(resp, "url", cfg->url);
+#if HA_WEBHOOK_MAX_URLS > 0
+    add_urls_to_response(resp, cfg);
+#endif
+    cJSON_AddBoolToObject(resp, "manual_override", cfg->manual_override);
+    cJSON_AddBoolToObject(resp, "enabled", cfg->enabled);
+    cJSON_AddStringToObject(resp, "last_post", cfg->last_post[0] ? cfg->last_post : "");
+    cJSON_AddStringToObject(resp, "status", cfg->status[0] ? cfg->status : "unknown");
+    cJSON_AddNumberToObject(resp, "retries", cfg->retries);
+    cJSON_AddNumberToObject(resp, "interval", cfg->interval);
+    cJSON_AddNumberToObject(resp, "success_count", cfg->success_count);
+    cJSON_AddNumberToObject(resp, "fail_count", cfg->fail_count);
+    cJSON_AddStringToObject(resp, "last_error_time", cfg->last_error_time[0] ? cfg->last_error_time : "");
+    cJSON_AddStringToObject(resp, "last_error", cfg->last_error[0] ? cfg->last_error : "");
+
+    return resp;
+}
+
 /**
  * @brief Send a JSON response to the client
  *
@@ -118,7 +196,7 @@ static esp_err_t webhook_post_handler(httpd_req_t *req)
     }
     buf[total] = '\0';
 
-    ESP_LOGD(TAG, "Received request body: %s", buf);
+    ESP_LOGI(TAG, "Received request body: %s", buf);
 
     cJSON *root = cJSON_Parse(buf);
     free(buf);
@@ -132,6 +210,33 @@ static esp_err_t webhook_post_handler(httpd_req_t *req)
     cJSON *url = cJSON_GetObjectItem(root, "url");
     cJSON *enabled = cJSON_GetObjectItem(root, "enabled");
     cJSON *interval = cJSON_GetObjectItem(root, "interval");
+    cJSON *manual_override = cJSON_GetObjectItem(root, "manual_override");
+#if HA_WEBHOOK_MAX_URLS > 0
+    cJSON *urls = cJSON_GetObjectItem(root, "urls");
+#else
+    cJSON *urls = cJSON_GetObjectItem(root, "urls");
+#endif
+
+    ha_webhook_config_t old_cfg = {0};
+    esp_err_t have = ha_webhooks_get_config(&old_cfg);
+    bool current_manual_override = (have == ESP_OK) ? old_cfg.manual_override : false;
+    bool has_manual_override = cJSON_IsBool(manual_override);
+
+    if (manual_override && !has_manual_override)
+    {
+        ESP_LOGW(TAG, "manual_override must be a boolean");
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid manual override");
+    }
+
+    if (current_manual_override && !has_manual_override)
+    {
+        ESP_LOGI(TAG, "Ignoring external webhook update because manual override is enabled");
+        cJSON_Delete(root);
+
+        cJSON *resp = create_webhook_response(&old_cfg);
+        return send_json(req, resp, 200);
+    }
 
     if (!cJSON_IsString(url) || !url_is_http(url->valuestring))
     {
@@ -140,22 +245,97 @@ static esp_err_t webhook_post_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid url");
     }
 
+    if (urls)
+    {
+#if HA_WEBHOOK_MAX_URLS == 0
+        ESP_LOGW(TAG, "urls array is not supported on this hardware");
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "urls not supported");
+#else
+        if (!cJSON_IsArray(urls))
+        {
+            ESP_LOGW(TAG, "urls must be an array");
+            cJSON_Delete(root);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid urls");
+        }
+
+        int url_items = cJSON_GetArraySize(urls);
+        if (url_items <= 0)
+        {
+            ESP_LOGW(TAG, "urls array must not be empty");
+            cJSON_Delete(root);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty urls");
+        }
+        if (url_items > (int)HA_WEBHOOK_MAX_URLS)
+        {
+            ESP_LOGW(TAG, "urls array exceeds supported size: %d", url_items);
+            cJSON_Delete(root);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "too many urls");
+        }
+
+        for (int i = 0; i < url_items; ++i)
+        {
+            cJSON *entry = cJSON_GetArrayItem(urls, i);
+            if (!cJSON_IsString(entry) || !entry->valuestring || entry->valuestring[0] == '\0')
+            {
+                ESP_LOGW(TAG, "urls[%d] must be a non-empty string", i);
+                cJSON_Delete(root);
+                return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid urls entry");
+            }
+
+            if (!url_is_http(entry->valuestring))
+            {
+                ESP_LOGW(TAG, "urls[%d] must use HTTP or HTTPS", i);
+                cJSON_Delete(root);
+                return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid url entry");
+            }
+        }
+
+        cJSON *primary_entry = cJSON_GetArrayItem(urls, 0);
+        if (!url_is_http(url->valuestring) || !primary_entry || strcmp(url->valuestring, primary_entry->valuestring) != 0)
+        {
+            ESP_LOGW(TAG, "url must match urls[0] and use HTTP or HTTPS when urls is configured");
+            cJSON_Delete(root);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "url must match urls[0]");
+        }
+#endif
+    }
+
     ESP_LOGI(TAG, "Setting webhook URL: %s", url->valuestring);
 
-    // Load current cached config to determine if changes are needed
-    ha_webhook_config_t old_cfg = {0};
-    esp_err_t have = ha_webhooks_get_config(&old_cfg);
     bool first_set = (have != ESP_OK || old_cfg.url[0] == '\0');
+    bool requested_manual_override = has_manual_override ? cJSON_IsTrue(manual_override) : current_manual_override;
 
     // Prepare new configuration, preserving fields not controlled here
     ha_webhook_config_t cfg = old_cfg;
     strlcpy(cfg.url, url->valuestring, sizeof(cfg.url));
+#if HA_WEBHOOK_MAX_URLS > 0
+    clear_config_urls(&cfg);
+    if (cJSON_IsArray(urls))
+    {
+        size_t idx = 0;
+        cJSON *entry = NULL;
+        cJSON_ArrayForEach(entry, urls)
+        {
+            if (idx >= HA_WEBHOOK_MAX_URLS)
+                break;
+            strlcpy(cfg.urls[idx], entry->valuestring, sizeof(cfg.urls[idx]));
+            idx++;
+        }
+        cfg.url_count = idx;
+    }
+#endif
+    cfg.manual_override = requested_manual_override;
     cfg.enabled = cJSON_IsBool(enabled) ? cJSON_IsTrue(enabled) : true;
     if (cJSON_IsNumber(interval))
         cfg.interval = interval->valueint;
 
     // Check if meaningful fields actually changed
-    bool changed = (strcmp(old_cfg.url, cfg.url) != 0) || (old_cfg.enabled != cfg.enabled) || (old_cfg.interval != cfg.interval);
+    bool changed = (strcmp(old_cfg.url, cfg.url) != 0) || (old_cfg.manual_override != cfg.manual_override) ||
+                   (old_cfg.enabled != cfg.enabled) || (old_cfg.interval != cfg.interval);
+#if HA_WEBHOOK_MAX_URLS > 0
+    changed = changed || !webhook_urls_equal(&old_cfg, &cfg);
+#endif
 
     ESP_LOGI(TAG, "Webhook %s, enabled: %s", first_set ? "created" : (changed ? "updated" : "unchanged"),
              cfg.enabled ? "yes" : "no");
@@ -174,16 +354,7 @@ static esp_err_t webhook_post_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
     }
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "url", cfg.url);
-    cJSON_AddBoolToObject(resp, "enabled", cfg.enabled);
-    cJSON_AddNumberToObject(resp, "interval", cfg.interval);
-
-    // Runtime stats (may be zeroed if device hasn't posted yet)
-    cJSON_AddNumberToObject(resp, "success_count", cfg.success_count);
-    cJSON_AddNumberToObject(resp, "fail_count", cfg.fail_count);
-    cJSON_AddStringToObject(resp, "last_error_time", cfg.last_error_time[0] ? cfg.last_error_time : "");
-    cJSON_AddStringToObject(resp, "last_error", cfg.last_error[0] ? cfg.last_error : "");
+    cJSON *resp = create_webhook_response(&cfg);
 
     return send_json(req, resp, first_set ? 201 : 200);
 }
@@ -204,43 +375,19 @@ static esp_err_t webhook_get_handler(httpd_req_t *req)
     ha_webhook_config_t cfg = {0};
     esp_err_t r = ha_webhooks_get_config(&cfg);
 
-    cJSON *resp = cJSON_CreateObject();
-
     if (r == ESP_OK)
     {
         ESP_LOGI(TAG, "Returning webhook config: URL=%s, enabled=%s, status=%s",
                  cfg.url, cfg.enabled ? "yes" : "no",
                  cfg.status[0] ? cfg.status : "unknown");
-
-        cJSON_AddStringToObject(resp, "url", cfg.url);
-        cJSON_AddBoolToObject(resp, "enabled", cfg.enabled);
-        cJSON_AddStringToObject(resp, "last_post", cfg.last_post[0] ? cfg.last_post : "");
-        cJSON_AddStringToObject(resp, "status", cfg.status[0] ? cfg.status : "unknown");
-        cJSON_AddNumberToObject(resp, "retries", cfg.retries);
-        cJSON_AddNumberToObject(resp, "interval", cfg.interval);
-
-        cJSON_AddNumberToObject(resp, "success_count", cfg.success_count);
-        cJSON_AddNumberToObject(resp, "fail_count", cfg.fail_count);
-        cJSON_AddStringToObject(resp, "last_error_time", cfg.last_error_time[0] ? cfg.last_error_time : "");
-        cJSON_AddStringToObject(resp, "last_error", cfg.last_error[0] ? cfg.last_error : "");
-    }
-    else
-    {
-        ESP_LOGI(TAG, "No webhook configuration found, returning defaults");
-
-        cJSON_AddStringToObject(resp, "url", "");
-        cJSON_AddBoolToObject(resp, "enabled", false);
-        cJSON_AddStringToObject(resp, "last_post", "");
-        cJSON_AddStringToObject(resp, "status", "disabled");
-        cJSON_AddNumberToObject(resp, "retries", 0);
-        cJSON_AddNumberToObject(resp, "interval", 0);
-
-        cJSON_AddNumberToObject(resp, "success_count", 0);
-        cJSON_AddNumberToObject(resp, "fail_count", 0);
-        cJSON_AddStringToObject(resp, "last_error_time", "");
-        cJSON_AddStringToObject(resp, "last_error", "");
+        cJSON *resp = create_webhook_response(&cfg);
+        return send_json(req, resp, 200);
     }
 
+    ESP_LOGI(TAG, "No webhook configuration found, returning defaults");
+    strlcpy(cfg.status, "disabled", sizeof(cfg.status));
+
+    cJSON *resp = create_webhook_response(&cfg);
     return send_json(req, resp, 200);
 }
 
@@ -263,7 +410,12 @@ static esp_err_t webhook_delete_handler(httpd_req_t *req)
 
     ha_webhook_config_t cfg = old_cfg;
     strlcpy(cfg.url, "", sizeof(cfg.url));
+#if HA_WEBHOOK_MAX_URLS > 0
+    clear_config_urls(&cfg);
+#endif
+    cfg.manual_override = false;
     cfg.enabled = false;
+    cfg.interval = 0;
     cfg.last_post[0] = '\0';
     strlcpy(cfg.status, "disabled", sizeof(cfg.status));
     cfg.retries = 0;
@@ -273,11 +425,15 @@ static esp_err_t webhook_delete_handler(httpd_req_t *req)
     cfg.last_error[0] = '\0';
 
     bool changed = (old_cfg.url[0] != '\0') || (old_cfg.enabled != false) ||
+                   (old_cfg.manual_override != false) ||
                    (old_cfg.last_post[0] != '\0') || (strcmp(old_cfg.status, "disabled") != 0) ||
                    (old_cfg.retries != 0) || (old_cfg.interval != 0) ||
                    (old_cfg.success_count != 0) || (old_cfg.fail_count != 0) ||
                    (old_cfg.last_error_time[0] != '\0') || (old_cfg.last_error[0] != '\0') ||
                    (have != ESP_OK);
+#if HA_WEBHOOK_MAX_URLS > 0
+    changed = changed || (old_cfg.url_count != 0);
+#endif
 
     if (changed)
     {
