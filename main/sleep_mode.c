@@ -966,7 +966,8 @@ void light_sleep_task(void *pvParameters)
                         }
                         elm327_sleep();
                         can_disable();
-                        wifi_mgr_deinit();
+                        // kww wifi_mgr_deinit();
+			wifi_mgr_disable(); // <--- CHANGED
                         ble_disable();
                         led_set_level(0,0,0);
                         // Update immediately to prevenet elm327 wakeup 
@@ -1057,7 +1058,8 @@ void light_sleep_task(void *pvParameters)
                 }
                 elm327_sleep();
                 can_disable();
-                wifi_mgr_deinit();
+                // kww wifi_mgr_deinit();
+		wifi_mgr_disable(); // <--- CHANGED
                 ble_disable();
                 // Update immediately to prevenet elm327 wakeup 
                 state_info.state = current_state;

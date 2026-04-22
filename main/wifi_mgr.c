@@ -945,8 +945,17 @@ esp_err_t wifi_mgr_disable(void) {
     // Disconnect STA if connected (but don't wait for event since we cleared bits)
     if (wifi_status.sta_connected) {
         ESP_LOGI(TAG, "Disconnecting STA...");
-        esp_wifi_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(100)); // Just a short delay for the disconnect command
+
+        // --- kww NEW: Blackhole LwIP traffic so WireGuard stops routing packets! ---
+        if (sta_netif) {
+            esp_netif_ip_info_t null_ip;
+            memset(&null_ip, 0, sizeof(null_ip));
+            esp_netif_set_ip_info(sta_netif, &null_ip);
+        }
+        // -----------------------------------------------------------------------
+
+        // REMOVED esp_wifi_disconnect();
+        // REMOVED vTaskDelay(pdMS_TO_TICKS(100)); // Just a short delay for the disconnect command
     }
     
     // Stop WiFi
