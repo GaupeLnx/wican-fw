@@ -53,6 +53,8 @@
 #include "esp_adc/adc_oneshot.h"
 #include "dev_status.h"
 #include "wifi_mgr.h"
+#include "wc_mdns.h"
+#include "vpn_manager.h"
 #include "restart_tracker.h"
 
 // #define TAG 		__func__
@@ -966,8 +968,9 @@ void light_sleep_task(void *pvParameters)
                         }
                         elm327_sleep();
                         can_disable();
-                        // kww wifi_mgr_deinit();
-			wifi_mgr_disable(); // <--- CHANGED
+                        vpn_manager_stop();
+                        wc_mdns_deinit();
+                        wifi_mgr_deinit();
                         ble_disable();
                         led_set_level(0,0,0);
                         // Update immediately to prevenet elm327 wakeup 
@@ -1058,8 +1061,9 @@ void light_sleep_task(void *pvParameters)
                 }
                 elm327_sleep();
                 can_disable();
-                // kww wifi_mgr_deinit();
-		wifi_mgr_disable(); // <--- CHANGED
+                vpn_manager_stop();
+                wc_mdns_deinit();
+                wifi_mgr_deinit();
                 ble_disable();
                 // Update immediately to prevenet elm327 wakeup 
                 state_info.state = current_state;

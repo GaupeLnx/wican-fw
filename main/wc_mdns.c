@@ -64,3 +64,10 @@ void wc_mdns_init(char *id, char* hv, char* fv)
     ESP_ERROR_CHECK_WITHOUT_ABORT(mdns_service_add("WiCAN-WebServer", "_wican", "_tcp", 80, 
                                      serviceTxtData, sizeof(serviceTxtData) / sizeof(serviceTxtData[0])));
 }
+
+
+void wc_mdns_deinit(void)
+{
+    mdns_service_remove_all();
+    mdns_free();
+}
