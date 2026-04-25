@@ -212,6 +212,9 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
     char pid_init[256] = {0};
     char pid_cmd[64] = {0};
     char expr[128] = {0};
+    bool is_multi_expr = false;
+    cJSON *exprs_json_array = NULL;
+    cJSON *multi_values_array = NULL;
 
     if (body_json)
     {
@@ -223,6 +226,7 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
         const cJSON *jpi = cJSON_GetObjectItemCaseSensitive(body_json, "pid_init");
         const cJSON *jpid = cJSON_GetObjectItemCaseSensitive(body_json, "pid");
         const cJSON *je = cJSON_GetObjectItemCaseSensitive(body_json, "expr");
+	const cJSON *je_array = cJSON_GetObjectItemCaseSensitive(body_json, "exprs");
 
         if (!cJSON_IsString(jk) || !jk->valuestring)
         {
@@ -252,8 +256,13 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
             strlcpy(pid_init, jpi->valuestring, sizeof(pid_init));
         if (cJSON_IsString(jpid) && jpid->valuestring)
             strlcpy(pid_cmd, jpid->valuestring, sizeof(pid_cmd));
-        if (cJSON_IsString(je) && je->valuestring)
+            
+        if (cJSON_IsArray(je_array)) {
+            is_multi_expr = true;
+            exprs_json_array = cJSON_Duplicate(je_array, 1); // Save a copy before body_json is deleted
+        } else if (cJSON_IsString(je) && je->valuestring) {
             strlcpy(expr, je->valuestring, sizeof(expr));
+        }
 
         cJSON_Delete(body_json);
         heap_caps_free(body);
@@ -524,7 +533,7 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
     }
     else if (strcmp(kind, "custom") == 0 || strcmp(kind, "vehicle") == 0)
     {
-        if (pid_cmd[0] == '\0' || expr[0] == '\0')
+        if (pid_cmd[0] == '\0' || (expr[0] == '\0' && !is_multi_expr))
         {
             snprintf(err_msg, sizeof(err_msg), "Missing pid/expr");
             ok = false;
@@ -669,35 +678,60 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
             memcpy(padded_eval_buf, win, copy_len);
         }
 
-        double result = 0;
-        
-        if (strcasecmp((const char *)expr, "RAW") == 0) {
-            is_raw = true; 
-            
-            // DITCH the 'bytes' buffer and use the raw, unfiltered concatenated array!
-            raw_str = autopid_process_raw_expression(parsed_elm_response.data, parsed_elm_response.length);
-            
-            if (raw_str) {
-                ok = true; // Tell the Web UI it worked!
-            } else {
-                ok = false;
-                snprintf(err_msg, sizeof(err_msg), "RAW string generation failed");
-            }
-        }       
-      
-        else if (evaluate_expression((uint8_t *)expr, (uint8_t *)padded_eval_buf, 0, &result))
-        {
-            result = round(result * 100.0) / 100.0;
-            value = result;
-            ok = true;
-        }
-        else
-        {
-            snprintf(err_msg, sizeof(err_msg), "Expression eval failed");
-            ok = false;
-        }
+	extern char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len, bool is_dtc);
 
-        heap_caps_free(padded_eval_buf);
+        if (is_multi_expr) {
+            multi_values_array = cJSON_CreateArray();
+            cJSON *expr_item = NULL;
+            
+            cJSON_ArrayForEach(expr_item, exprs_json_array) {
+                if (cJSON_IsString(expr_item)) {
+                    double result = 0;
+                    
+                    if (strcasecmp(expr_item->valuestring, "RAW") == 0 || strcasecmp(expr_item->valuestring, "DTC_RAW") == 0) {
+                        bool is_dtc = (strcasecmp(expr_item->valuestring, "DTC_RAW") == 0);
+                        char *cleaned_raw = autopid_process_raw_expression(parsed_elm_response.data, parsed_elm_response.length, is_dtc);
+			
+                        if (cleaned_raw) {
+                            cJSON_AddItemToArray(multi_values_array, cJSON_CreateString(cleaned_raw));
+                            heap_caps_free(cleaned_raw);
+                        } else {
+                            cJSON_AddItemToArray(multi_values_array, cJSON_CreateNull());
+                        }
+                    } else if (evaluate_expression((uint8_t *)expr_item->valuestring, (uint8_t *)padded_eval_buf, 0, &result)) {
+                        result = round(result * 100.0) / 100.0;
+                        cJSON_AddItemToArray(multi_values_array, cJSON_CreateNumber(result));
+                    } else {
+                        cJSON_AddItemToArray(multi_values_array, cJSON_CreateNull());
+                    }
+                } else {
+                    cJSON_AddItemToArray(multi_values_array, cJSON_CreateNull());
+                }
+            }
+            ok = true;
+        } else {
+            // Legacy single-expression logic
+            double result = 0;
+            if (strcasecmp((const char *)expr, "RAW") == 0 || strcasecmp((const char *)expr, "DTC_RAW") == 0) {
+                is_raw = true;
+                bool is_dtc = (strcasecmp((const char *)expr, "DTC_RAW") == 0);
+                raw_str = autopid_process_raw_expression(parsed_elm_response.data, parsed_elm_response.length, is_dtc);
+		
+                if (raw_str) {
+                    ok = true;
+                } else {
+                    snprintf(err_msg, sizeof(err_msg), "RAW parsing failed");
+                    ok = false;
+                }
+            } else if (evaluate_expression((uint8_t *)expr, (uint8_t *)padded_eval_buf, 0, &result)) {
+                result = round(result * 100.0) / 100.0;
+                value = result;
+                ok = true;
+            } else {
+                snprintf(err_msg, sizeof(err_msg), "Expression eval failed");
+                ok = false;
+            }
+        }
         padded_eval_buf = NULL;
     }
     else
@@ -718,13 +752,19 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "ok", ok);
         if (ok)
         {
-	    cJSON_AddStringToObject(root, "raw", autopid_test_pid_raw_get());
+	        cJSON_AddStringToObject(root, "raw", autopid_test_pid_raw_get());
 	    
-            if (is_raw && raw_str != NULL) {
-                cJSON_AddStringToObject(root, "value", raw_str);
+            if (is_multi_expr && multi_values_array != NULL) {
+                // Attach the new batch array
+                cJSON_AddItemToObject(root, "values", multi_values_array);
             } else {
-                cJSON_AddNumberToObject(root, "value", value);
-                cJSON_AddStringToObject(root, "unit", unit ? unit : "");
+                // Legacy Single Value
+                if (is_raw && raw_str != NULL) {
+                    cJSON_AddStringToObject(root, "value", raw_str);
+                } else {
+                    cJSON_AddNumberToObject(root, "value", value);
+                    cJSON_AddStringToObject(root, "unit", unit ? unit : "");
+                }
             }
         }
         else
@@ -757,6 +797,11 @@ static esp_err_t test_pid_handler(httpd_req_t *req)
     autopid_test_pid_restore_autopid_safe_elm_state();
     autopid_unlock();
     xSemaphoreGive(test_pid_lock);
+
+    if (exprs_json_array) {
+        cJSON_Delete(exprs_json_array);
+    }
+    
     return ESP_OK;
 }
 

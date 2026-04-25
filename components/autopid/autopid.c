@@ -3056,20 +3056,13 @@ static void send_commands(char *commands, uint32_t delay_ms)
 
 
 
-char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len) {
+char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len, bool is_dtc) {
+
     if (!data || data_len == 0) return NULL;
 
-    // 1. Quick scan to see if it's a Mode 03 (DTC) response
-    bool is_mode_03 = false;
-    for (uint32_t i = 0; i < data_len; i++) {
-        if (data[i] == 0x43 && (i + 1) < data_len) {
-            is_mode_03 = true;
-            break;
-        }
-    }
     
-    // 2. If it IS a DTC, run the formatting
-    if (is_mode_03) {
+    // 1. If user explicitly requested DTC_RAW, run the formatting
+    if (is_dtc) {
         uint8_t total_dtcs = 0;
         uint8_t dtc_buffer[128]; 
         int dtc_idx = 0;
@@ -3154,109 +3147,138 @@ char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len) {
 }
 
 
-static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
-    if (!curr_pid || !param) return;
+static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
+    if (!curr_pid || curr_pid->cmd == NULL || strlen(curr_pid->cmd) == 0) return;
 
-    ESP_LOGI(TAG, "Processing parameter: %s", param->name);
-    
-    // Command Processing
-    if (curr_pid->cmd != NULL && strlen(curr_pid->cmd) > 0) {
+    ESP_LOGI(TAG, "Executing command: %s", curr_pid->cmd);
 
-        ESP_LOGI(TAG, "Executing command: %s", curr_pid->cmd);
+    #if HARDWARE_VER == WICAN_PRO
+    if (elm327_process_cmd((uint8_t *)curr_pid->cmd, strlen(curr_pid->cmd), &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser) == ESP_OK)
+    #else
+    twai_message_t tx_msg;
+    if (elm327_process_cmd((uint8_t *)curr_pid->cmd, strlen(curr_pid->cmd), &tx_msg, &autopidQueue) == ESP_OK)
+    #endif
+    {
+        response_t elm327_response;
+        memset(&elm327_response, 0, sizeof(elm327_response));
 
-        #if HARDWARE_VER == WICAN_PRO
-        if (elm327_process_cmd((uint8_t *)curr_pid->cmd, strlen(curr_pid->cmd), &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser) == ESP_OK)
-        #else
-        twai_message_t tx_msg;
-        if (elm327_process_cmd((uint8_t *)curr_pid->cmd, strlen(curr_pid->cmd), &tx_msg, &autopidQueue) == ESP_OK)
-        #endif
-        {
-            response_t elm327_response;
-            memset(&elm327_response, 0, sizeof(elm327_response));
+        /* 1. Drop the lock right before we go to sleep waiting for the car */
+        xSemaphoreGive(autopid_config->mutex);
 
-            // kww- replace by below if (xQueueReceive(autopidQueue, &elm327_response, pdMS_TO_TICKS(12000)) == pdPASS) {
+        /* 2. Wait for the car */
+        BaseType_t got_response = xQueueReceive(autopidQueue, &elm327_response, pdMS_TO_TICKS(1000));
 
-            /* 1. Drop the lock right before we go to sleep waiting for the car */
-            xSemaphoreGive(autopid_config->mutex);
+        /* 3. Instantly re-take the lock */
+        xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
 
-            /* 2. Wait for the car (this takes 15ms - 50ms) */
-            BaseType_t got_response = xQueueReceive(autopidQueue, &elm327_response, pdMS_TO_TICKS(1000));
+        if (got_response == pdPASS) {
 
-            /* 3. Instantly re-take the lock before we process or modify any data */
-            xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
-            /* --------------------------- */
+            if (strstr((char *)elm327_response.data, "error") == NULL &&
+                strstr((char *)elm327_response.data, "SEARCHING") == NULL &&
+                strstr((char *)elm327_response.data, "UNABLE TO CONNECT") == NULL) {
+                
+                xEventGroupSetBits(xautopid_event_group, ECU_CONNECTED_BIT);
+                autopid_config->last_successful_pid_time = time(NULL);
 
-            if (got_response == pdPASS) {
-	      
-                if (strstr((char *)elm327_response.data, "error") == NULL &&
-                    strstr((char *)elm327_response.data, "SEARCHING") == NULL &&
-                    strstr((char *)elm327_response.data, "UNABLE TO CONNECT") == NULL) {
-                    
-                    double result;
+                // ---> SEMANTIC GARBAGE COLLECTOR <---
+                uint32_t valid_start = 0;
+                bool found_valid = false;
+                
+                // Scan the buffer byte-by-byte to find the true start of the OBD2 response
+                for (uint32_t i = 0; i < elm327_response.length; i++) {
+                    // Check for an ISO-TP First Frame (0x10) followed by a valid Service ID (0x62, 0x41, 0x49, 0x54)
+                    if (elm327_response.data[i] == 0x10 && (i + 2 < elm327_response.length)) {
+                        uint8_t sid = elm327_response.data[i+2];
+                        if (sid == 0x62 || sid == 0x41 || sid == 0x49 || sid == 0x54) {
+                            valid_start = i;
+                            found_valid = true;
+                            break;
+                        }
+                    }
+                    // Check for a Single Frame (0x01 to 0x07) followed by a valid Service ID
+                    else if (elm327_response.data[i] > 0x00 && elm327_response.data[i] < 0x08 && (i + 1 < elm327_response.length)) {
+                        uint8_t sid = elm327_response.data[i+1];
+                        if (sid == 0x62 || sid == 0x41 || sid == 0x49 || sid == 0x54) {
+                            valid_start = i;
+                            found_valid = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (found_valid) {
+                    // If garbage was found at the front, shift the real data to the beginning
+                    if (valid_start > 0 && valid_start < elm327_response.length) {
+                        uint32_t new_len = elm327_response.length - valid_start;
+                        memmove(elm327_response.data, &elm327_response.data[valid_start], new_len);
+                        memset(&elm327_response.data[new_len], 0, AUTOPID_BUFFER_SIZE - new_len);
+                        elm327_response.length = new_len;
+                    }
+                } else {
+                    // The ENTIRE buffer is garbage! Wipe it out so we don't process it.
+                    elm327_response.length = 0;
+                    strcpy((char *)elm327_response.data, "error");
+                }
+                // -----------------------------------------
+
+		
+                // ---> LOOP THROUGH PARAMETERS USING THE SHARED RESPONSE <---
+                for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
+                    parameter_t *param = &curr_pid->parameters[p];
+                    if (!param->enabled) continue;
+
+                    // If we are in Legacy mode, respect the individual parameter timers
+                    if (check_timers) {
+                        if (!wc_timer_is_expired(&param->timer)) continue;
+                        wc_timer_set(&param->timer, param->period);
+                    }
+
                     param->failed = false;
-                    xEventGroupSetBits(xautopid_event_group, ECU_CONNECTED_BIT);
 
                     // 1. Custom / Specific PID Logic
-
                     if (curr_pid->pid_type == PID_CUSTOM || curr_pid->pid_type == PID_SPECIFIC) {
 
-		      // If the user specfici RAW in the expression field, then just send
-		      // all the 
-                        if (param->expression && strcasecmp(param->expression, "RAW") == 0) {
-                           
-                            // Free old memory to prevent leaks
+                        // Apply the RAW / DTC_RAW fix we just mapped out!
+                        if (param->expression && (strcasecmp(param->expression, "RAW") == 0 || strcasecmp(param->expression, "DTC_RAW") == 0)) {
                             if (param->raw_string_value) {
                                 free(param->raw_string_value);
                                 param->raw_string_value = NULL;
                             }
                             
-                            // Call our shiny new universal function!
-                            param->raw_string_value = autopid_process_raw_expression(elm327_response.data, elm327_response.length);
+                            bool is_dtc = (strcasecmp(param->expression, "DTC_RAW") == 0);
+                            param->raw_string_value = autopid_process_raw_expression(elm327_response.data, elm327_response.length, is_dtc);
                             
-                            if (param->raw_string_value) {
-                                param->failed = false;
-                                autopid_config->last_successful_pid_time = time(NULL);
-                                publish_parameter_mqtt(param);
-                            } else {
-                                param->failed = true;
-                                ESP_LOGE(TAG, "RAW expression processing failed or out of memory");
-                            }
+                            if (param->raw_string_value) publish_parameter_mqtt(param);
+                            else param->failed = true;
                             
                         } else {
-                            // ---> NORMAL MATH EVALUATION LOGIC <---               
+                            // Standard Math Evaluation
+                            double result;
                             if (evaluate_expression((uint8_t *)param->expression, (uint8_t *)elm327_response.data, 0, &result)) {
-                                if (param->min != FLT_MAX && result < param->min) {
-                                    // Out of bounds, skip
-                                } else if (param->max != FLT_MAX && result > param->max) {
-                                    // Out of bounds, skip
-                                } else {
+                                if (param->min != FLT_MAX && result < param->min) { } 
+                                else if (param->max != FLT_MAX && result > param->max) { } 
+                                else {
                                     param->value = (float)(round(result * 100.0) / 100.0);
-                                    autopid_config->last_successful_pid_time = time(NULL);
                                     publish_parameter_mqtt(param);
                                 }
-                            } else {
-                                param->failed = true;
-                                ESP_LOGE(TAG, "Expression eval failed for %s", param->name);
-                            }
+                            } else { param->failed = true; }
                         }
                     }
                     // 2. Standard PID Logic
                     else if (curr_pid->pid_type == PID_STD) {
                         const std_pid_t *pid_info = get_pid_from_string(param->name);
                         if (pid_info) {
-                            for (int p = 0; p < pid_info->num_params; p++) {
+                            for (int pi = 0; pi < pid_info->num_params; pi++) {
                                 const char *param_name = strchr(param->name, '-');
-                                if (param_name && strcmp(param_name + 1, pid_info->params[p].name) == 0) {
+                                if (param_name && strcmp(param_name + 1, pid_info->params[pi].name) == 0) {
                                     esp_err_t err;
                                     if (elm327_response.priority_data != NULL) {
-                                        err = extract_signal_value(elm327_response.priority_data, elm327_response.priority_data_len, &pid_info->params[p], &param->value);
+                                        err = extract_signal_value(elm327_response.priority_data, elm327_response.priority_data_len, &pid_info->params[pi], &param->value);
                                     } else {
-                                        err = extract_signal_value(elm327_response.data, elm327_response.length, &pid_info->params[p], &param->value);
+                                        err = extract_signal_value(elm327_response.data, elm327_response.length, &pid_info->params[pi], &param->value);
                                     }
-
                                     if (err == ESP_OK) {
                                         param->value = roundf(param->value * 100.0) / 100.0;
-                                        autopid_config->last_successful_pid_time = time(NULL);
                                         publish_parameter_mqtt(param);
                                     }
                                     break;
@@ -3264,22 +3286,35 @@ static void execute_pid_parameter(pid_data_t *curr_pid, parameter_t *param) {
                             }
                         }
                     }
-                } else {
-		  param->failed = true;
-		  ESP_LOGE(TAG, "ELM Response Error for %s", curr_pid->cmd);
                 }
-	    } else {
-	      param->failed = true;
-	      ESP_LOGE(TAG, "Queue Timeout for %s", curr_pid->cmd);
+            } else {
+                // ECU Responded with ERROR (Mark due parameters as failed)
+                for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
+                    parameter_t *param = &curr_pid->parameters[p];
+                    if (param->enabled && (!check_timers || wc_timer_is_expired(&param->timer))) {
+                        param->failed = true;
+                        if (check_timers) wc_timer_set(&param->timer, param->period);
+                    }
+                }
+                ESP_LOGE(TAG, "ELM Response Error for %s", curr_pid->cmd);
             }
-
-            // ---------------------------------------------------------
-
         } else {
-            ESP_LOGE(TAG, "Process Cmd Failed: %s", curr_pid->cmd);
+            // Queue Timeout (Mark due parameters as failed)
+            for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
+                parameter_t *param = &curr_pid->parameters[p];
+                if (param->enabled && (!check_timers || wc_timer_is_expired(&param->timer))) {
+                    param->failed = true;
+                    if (check_timers) wc_timer_set(&param->timer, param->period);
+                }
+            }
+            ESP_LOGE(TAG, "Queue Timeout for %s", curr_pid->cmd);
         }
+    } else {
+        ESP_LOGE(TAG, "Process Cmd Failed: %s", curr_pid->cmd);
     }
 }
+
+		     
 static bool autopid_should_pause_pid_polling(float *out_voltage, const char **out_reason)
 {
     if (out_voltage)
@@ -4244,11 +4279,18 @@ static void autopid_task(void *pvParameters)
                         pid_data_t *curr_pid = group->pids[i];
                         if (!curr_pid || !curr_pid->enabled) continue;
 
+                        // Check if ANY parameter in this PID is enabled before querying the car
+                        bool any_param_enabled = false;
                         for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
-                            parameter_t *param = &curr_pid->parameters[p];
-                            if (!param->enabled) continue;
-
-                            execute_pid_parameter(curr_pid, param);
+                            if (curr_pid->parameters[p].enabled) {
+                                any_param_enabled = true;
+                                break;
+                            }
+                        }
+                        
+                        if (any_param_enabled) {
+                            // Call our new unified function! (false = Groups use group timers, ignore param timers)
+                            execute_pid(curr_pid, false);
                         }
                     }
                 }
@@ -4281,40 +4323,38 @@ static void autopid_task(void *pvParameters)
                         (curr_pid->pid_type == PID_SPECIFIC && !autopid_config->pid_specific_en)) continue;
 
                     if (!curr_pid->enabled) continue;
+                    
+                    // Check if ANY parameter in this PID is due for a poll right now
+                    bool any_due = false;
                     for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
-                        parameter_t *param = &curr_pid->parameters[p];
-                        if (!param->enabled) continue;
-
-                        if (wc_timer_is_expired(&param->timer)) {
-			  if (curr_pid->pid_type != previous_pid_type) {
-			    // FORCE a protocol reset when switching list types
-			    current_active_init = NULL; 
-
-			    switch (curr_pid->pid_type) {
-			    case PID_CUSTOM: 
-			      if(autopid_config->custom_init) {
-				ESP_LOGI(TAG, "Switching to Custom Init: %s", autopid_config->custom_init);
-				send_commands(autopid_config->custom_init, 2); 
-			      }
-			      break;
-			    case PID_STD: 
-			      if(autopid_config->standard_init) {
-				send_commands(autopid_config->standard_init, 2); 
-			      }
-			      break;
-			    case PID_SPECIFIC: 
-			      if(autopid_config->specific_init) {
-				send_commands(autopid_config->specific_init, 2); 
-			      }
-			      break;
-			    default: break;
-			    }
-			    previous_pid_type = curr_pid->pid_type;
-			  }
-
-			  execute_pid_parameter(curr_pid, param);
-			  wc_timer_set(&param->timer, param->period);
+                        if (curr_pid->parameters[p].enabled && wc_timer_is_expired(&curr_pid->parameters[p].timer)) {
+                            any_due = true;
+                            break;
                         }
+                    }
+
+                    if (any_due) {
+                        if (curr_pid->pid_type != previous_pid_type) {
+                            // FORCE a protocol reset when switching list types
+                            current_active_init = NULL; 
+
+                            switch (curr_pid->pid_type) {
+                                case PID_CUSTOM: 
+                                  if(autopid_config->custom_init) send_commands(autopid_config->custom_init, 2); 
+                                  break;
+                                case PID_STD: 
+                                  if(autopid_config->standard_init) send_commands(autopid_config->standard_init, 2); 
+                                  break;
+                                case PID_SPECIFIC: 
+                                  if(autopid_config->specific_init) send_commands(autopid_config->specific_init, 2); 
+                                  break;
+                                default: break;
+                            }
+                            previous_pid_type = curr_pid->pid_type;
+                        }
+
+                        // Execute the PID ONCE for all due parameters! (true = check param timers)
+                        execute_pid(curr_pid, true);
                     }
                 }
             }

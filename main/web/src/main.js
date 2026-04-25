@@ -1,4 +1,4 @@
-async function checkFirmwareUpdate() {
+    async function checkFirmwareUpdate() {
         try {
             const currentRaw = document.getElementById('fw_version')?.textContent?.trim();
             if (!currentRaw) return;
@@ -25,7 +25,8 @@ async function checkFirmwareUpdate() {
             const currentVersion = extractVersion(currentRaw);
             if (!currentVersion) return;
 
-            const response = await fetch('https://api.github.com/repos/meatpiHQ/wican-fw/releases');
+            // UPDATED: Point to your repository's releases API
+            const response = await fetch('https://api.github.com/repos/wambs/wican-fw/releases');
             if (!response.ok) return;
             const releases = await response.json();
             const proRelease = releases.find(rel =>
@@ -42,9 +43,10 @@ async function checkFirmwareUpdate() {
             if (cmpVersions(latestVersion, currentVersion) === 1) {
                 const notice = document.getElementById('firmware-update-notice');
                 if (notice) {
-                    const url = proRelease.html_url || 'https://github.com/meatpiHQ/wican-fw/releases';
+                    // UPDATED: Point the fallback URL to your repository
+                    const url = proRelease.html_url || 'https://github.com/wambs/wican-fw/releases';
                     const versionText = ` <span style='color:#b45309'>(v${latestVersion})</span>`;
-                    notice.innerHTML = `<span style=\"font-weight: 600;\">New firmware available!</span><br><a id=\"firmware-update-link\" href=\"${url}\" target=\"_blank\" style=\"color: #2563eb; text-decoration: underline;\">Download</a>${versionText}`;
+                    notice.innerHTML = `<span style=\"font-weight: 600;\">New Forked BETA firmware!</span><br><a id=\"firmware-update-link\" href=\"${url}\" target=\"_blank\" style=\"color: #2563eb; text-decoration: underline;\">Download</a>${versionText}`;
                     notice.style.display = 'block';
                 }
             }
@@ -6302,12 +6304,14 @@ async function testGroup(gIndex) {
             // Prepare Parameters
             let paramsToTest = pidData.parameters;
             if (!paramsToTest || paramsToTest.length === 0) {
-                paramsToTest = [{ name: "Raw Value", expression: "A", unit: "" }];
+                paramsToTest = [{ name: "Raw Value", expression: "RAW", unit: "" }];
             }
 
             let rawHexHasBeenShown = false;
+            let uiLines = [];
+            let exprsList = [];
 
-            // 5. Loop through Parameters
+            // 5. Build UI lines and Expression Array first
             for (let pIdx = 0; pIdx < paramsToTest.length; pIdx++) {
                 const param = paramsToTest[pIdx];
                 
@@ -6317,90 +6321,116 @@ async function testGroup(gIndex) {
                 paramLine.innerHTML = `- ${param.name || 'Value'}: <span style="color:#fbbf24;">Testing...</span>`;
                 resultsDiv.appendChild(paramLine);
 
-                // --- ASYNC REQUEST ---
-                (async () => {
-                    let success = false;
-                    let attempts = 0;
-                    let responseData = null;
+                uiLines.push(paramLine);
+                exprsList.push(param.expression || "A"); // Push to our new array
+            }
 
-                    while(attempts < 3 && !success) {
-                        try {
-                            await new Promise(r => setTimeout(r, 200)); 
+            // --- ASYNC BATCH REQUEST ---
+            // Notice we only fire ONE async function per PID card now, not one per parameter!
+            (async () => {
+                let success = false;
+                let attempts = 0;
+                let responseData = null;
 
-                            let payload;
-                            // Check the flag we injected during the migration!
-                            if (pidData.pid_type === 'std') {
-                                payload = {
-                                    kind: 'std',
-                                    name: param.name, // The backend needs the full name (e.g., "0C-Engine RPM")
-                                    protocol: document.getElementById('ecu_protocol')?.value || '0'
-                                };
-                            } else {
-                                payload = { 
-                                    kind: 'vehicle',
-                                    pid: pidData.pid,
-                                    pid_init: "", 
-                                    expr: param.expression || "A", 
-                                    init: initString
-                                };
-                            }
+                while(attempts < 3 && !success) {
+                    try {
+                        await new Promise(r => setTimeout(r, 200)); 
 
-                            const res = await fetch('/autopid/test_pid', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(payload),
-                            });
-                            
-                            responseData = await res.json().catch(() => null);
+                        let payload;
+                        if (pidData.pid_type === 'std') {
+                            // Standard PIDs only have 1 param in groups, use legacy payload
+                            payload = {
+                                kind: 'std',
+                                name: paramsToTest[0].name, 
+                                protocol: document.getElementById('ecu_protocol')?.value || '0'
+                            };
+                        } else {
+                            // NEW BATCH PAYLOAD
+                            payload = { 
+                                kind: 'vehicle',
+                                pid: pidData.pid,
+                                pid_init: "", 
+                                exprs: exprsList, // Send the array of expressions!
+                                init: initString
+                            };
+                        }
 
-                            if (res.ok && responseData) {
-                                if (responseData.error === "AutoPID busy") {
-                                    paramLine.innerHTML = `- ${param.name}: <span style="color:#f59e0b;">Busy...</span>`;
-                                    await new Promise(r => setTimeout(r, 1500));
-                                    attempts++;
-                                } else {
-                                    success = true; 
-                                }
+                        const res = await fetch('/autopid/test_pid', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        
+                        responseData = await res.json().catch(() => null);
+
+                        if (res.ok && responseData) {
+                            if (responseData.error === "AutoPID busy") {
+                                // Set all lines to busy
+                                uiLines.forEach((line, idx) => {
+                                    line.innerHTML = `- ${paramsToTest[idx].name}: <span style="color:#f59e0b;">Busy...</span>`;
+                                });
+                                await new Promise(r => setTimeout(r, 1500));
+                                attempts++;
                             } else {
                                 success = true; 
                             }
-                        } catch (e) {
+                        } else {
                             success = true; 
                         }
+                    } catch (e) {
+                        success = true; 
                     }
+                }
 
-                    // Update UI
-                    if (!responseData || !responseData.ok) {
-                        const errorMsg = responseData ? responseData.error : "Error";
-                        paramLine.innerHTML = `- ${param.name}: <span style="color:#ef4444;">${errorMsg}</span>`;
-                    } else {
-                        // Success Value
-                        const val = (responseData.value === null) ? 'null' : String(responseData.value);
-                        paramLine.innerHTML = `- ${param.name}: <span style="color:#34d399; font-weight:bold;">${val}</span> <span style="color:#aaa;">${param.unit || ''}</span>`;
-
-                        // HANDLE RAW HEX
-                        // Only add this line if we have data AND we haven't added it yet
-                        let rawData = responseData.raw || responseData.hex;
-                        if (!rawHexHasBeenShown && rawData) {
-                            rawHexHasBeenShown = true;
-
-			    // Sanitize: Remove '>' and trim whitespace/newlines
-                            rawData = rawData.toString().replace(/>/g, '').trim();
-			    
-                            const rawDiv = document.createElement('div');
-                            rawDiv.style.cssText = "padding-left:15px; font-family:monospace; color:#64748b; font-size:0.8em; margin:0; line-height:1.4;";
-                            rawDiv.innerText = `Raw Hex: ${rawData}`;
-                            
-                            // Insert as the FIRST child of resultsDiv so it sits above all parameters
-                            if (resultsDiv.firstChild) {
-                                resultsDiv.insertBefore(rawDiv, resultsDiv.firstChild);
-                            } else {
-                                resultsDiv.appendChild(rawDiv);
-                            }
+                // --- BATCH UI UPDATE ---
+                if (!responseData || !responseData.ok) {
+                    const errorMsg = responseData ? responseData.error : "Error";
+                    uiLines.forEach((line, idx) => {
+                        line.innerHTML = `- ${paramsToTest[idx].name}: <span style="color:#ef4444;">${errorMsg}</span>`;
+                    });
+                } else {
+                    
+                    // HANDLE RAW HEX (Only print it once at the top)
+                    let rawData = responseData.raw || responseData.hex;
+                    if (!rawHexHasBeenShown && rawData) {
+                        rawHexHasBeenShown = true;
+                        rawData = rawData.toString().replace(/>/g, '').trim();
+                        
+                        const rawDiv = document.createElement('div');
+                        rawDiv.style.cssText = "padding-left:15px; font-family:monospace; color:#64748b; font-size:0.8em; margin:0; line-height:1.4;";
+                        rawDiv.innerText = `Raw Hex: ${rawData}`;
+                        
+                        if (resultsDiv.firstChild) {
+                            resultsDiv.insertBefore(rawDiv, resultsDiv.firstChild);
+                        } else {
+                            resultsDiv.appendChild(rawDiv);
                         }
                     }
-                })(); 
-            }
+
+                    // Loop through the UI lines and apply the batched results
+                    for (let i = 0; i < paramsToTest.length; i++) {
+                        const param = paramsToTest[i];
+                        const paramLine = uiLines[i];
+                        
+                        let val = null;
+                        
+                        // Check if the backend returned our new "values" array, 
+                        // otherwise fallback to the legacy "value" (for STD pids)
+                        if (responseData.values !== undefined && Array.isArray(responseData.values)) {
+                            val = responseData.values[i];
+                        } else {
+                            val = responseData.value;
+                        }
+                        
+                        if (val === null) {
+                            paramLine.innerHTML = `- ${param.name}: <span style="color:#ef4444;">Eval Failed</span>`;
+                        } else {
+                            paramLine.innerHTML = `- ${param.name}: <span style="color:#34d399; font-weight:bold;">${val}</span> <span style="color:#aaa;">${param.unit || ''}</span>`;
+                        }
+                    }
+                }
+            })();
+                            
         }
     }
 
