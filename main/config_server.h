@@ -180,6 +180,7 @@ typedef struct _device_config
 	char log_period[16];
 	char imu_threshold[16];
 	bool debug_enabled;
+        char sta_home_priority[33];
 }device_config_t;
 
 
@@ -284,3 +285,5 @@ const char *config_server_get_sta_fallback_gateway(int index);
 const char *config_server_get_sta_fallback_dns(int index);
 
 char *config_server_get_status_json(bool remove_sensitive_info);
+
+char* config_server_get_home_priority_ssid(void);

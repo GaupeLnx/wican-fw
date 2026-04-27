@@ -225,7 +225,7 @@ static char can_datarate_str[11][7] = {
 								"1000K",
 };
 
-const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\",\"webhook_en\":\"enable\",\"sta_ssid\":\"MeatPi\",\"sta_pass\":\"TomatoSauce\",\"sta_security\":\"wpa3\",\
+const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\",\"webhook_en\":\"enable\",\"sta_ssid\":\"MeatPi\",\"sta_pass\":\"TomatoSauce\",\"sta_security\":\"wpa3\",\"sta_home_priority\":\"disabled\",\
 									\"ap_ssid_en\":\"disable\",\"ap_ssid\":\"\",\
 										\"home_ssid\":\"MeatPi\",\"home_password\":\"TomatoSauce\",\"home_security\":\"wpa3\",\"home_protocol\":\"elm327\",\
 										\"drive_ssid\":\"MeatPi\",\"drive_password\":\"TomatoSauce\",\"drive_security\":\"wpa3\",\"drive_protocol\":\"elm327\",\"drive_connection_type\":\"wifi\",\"drive_mode_timeout\":\"60\",\
@@ -362,6 +362,11 @@ int8_t config_server_get_webhook_en(void)
 char *config_server_get_sta_ssid(void)
 {
 	return device_config.sta_ssid;
+}
+
+char *config_server_get_home_priority_ssid(void)
+{
+	return device_config.sta_home_priority;
 }
 
 char *config_server_get_ap_pass(void)
@@ -1814,7 +1819,8 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 		cJSON_AddStringToObject(root, "drive_security", device_config.drive_security);
 	}
 
-
+        cJSON_AddStringToObject(root, "sta_home_priority", device_config.sta_home_priority);
+	
 	
 	cJSON_AddStringToObject(root, "home_protocol", device_config.home_protocol);
 	cJSON_AddStringToObject(root, "drive_protocol", device_config.drive_protocol);
@@ -2629,6 +2635,20 @@ static void config_server_load_cfg(char *cfg)
 	strlcpy(device_config.sta_pass, key->valuestring, sizeof(device_config.sta_pass));
 	ESP_LOGI(TAG, "device_config.sta_pass: %s", device_config.sta_pass);
 
+
+         //*****
+	key = cJSON_GetObjectItem(root,"sta_home_priority");
+	if(key == 0 || key->valuestring == NULL || strlen(key->valuestring) == 0)
+	{
+		strlcpy(device_config.sta_home_priority, "disabled", sizeof(device_config.sta_home_priority));
+	}
+	else
+	{
+		strlcpy(device_config.sta_home_priority, key->valuestring, sizeof(device_config.sta_home_priority));
+	}
+	ESP_LOGI(TAG, "device_config.sta_home_priority: %s", device_config.sta_home_priority);
+	//*****
+	
 	key = cJSON_GetObjectItem(root,"can_datarate");
 	if(key == 0)
 	{
@@ -4387,3 +4407,4 @@ const char *config_server_get_sta_fallback_dns(int index) {
     if (index < 0 || index >= device_config.sta_fallbacks_count) return "";
     return device_config.sta_fallbacks[index].dns;
 }
+

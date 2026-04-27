@@ -251,6 +251,15 @@ void wifi_network_init(char* ap_ssid_uid)
     ESP_LOGI(TAG, "   - AP Channel: %d", wifi_config.ap_channel);
     ESP_LOGI(TAG, "   - AP Auto-disable: %s", wifi_config.ap_auto_disable ? "Yes" : "No");
     ESP_LOGI(TAG, "   - STA Auto-reconnect: %s", wifi_config.sta_auto_reconnect ? "Yes" : "No");
+
+
+   // --- HOME PRIORITY SETUP ---
+    char *home_prio_ssid = config_server_get_home_priority_ssid();
+    if (home_prio_ssid != NULL && strlen(home_prio_ssid) > 0) {
+        strlcpy(wifi_config.sta_home_priority, home_prio_ssid, sizeof(wifi_config.sta_home_priority));
+    } else {
+        strlcpy(wifi_config.sta_home_priority, "disabled", sizeof(wifi_config.sta_home_priority));
+    }
     
     // Initialize WiFi Manager
     esp_err_t ret = wifi_mgr_init(&wifi_config);
@@ -267,6 +276,11 @@ void wifi_network_init(char* ap_ssid_uid)
         return;
     }
     ESP_LOGI(TAG, "WiFi enabled");
+
+    // Set auto-reconnect parameters
+    wifi_config.sta_auto_reconnect = true;
+    wifi_config.sta_max_retry = -1; // Infinite retries
+
 }
 
 /**

@@ -1702,6 +1702,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 static void wifi_reconnect_task(void* pvParameters) {
     const TickType_t reconnect_delay = pdMS_TO_TICKS(5000); // 5 seconds
     const TickType_t ap_client_check_delay = pdMS_TO_TICKS(10000); // 10 seconds
+    const TickType_t home_check_interval = pdMS_TO_TICKS(300000); // 5 Minutes
+    TickType_t last_home_check = xTaskGetTickCount();    
     
     ESP_LOGI(TAG, "WiFi reconnect task started");
     
@@ -1722,13 +1724,80 @@ static void wifi_reconnect_task(void* pvParameters) {
             vTaskDelay(reconnect_delay);
             continue;
         }
-        
+
         // Check if STA is already connected
         if (wifi_status.sta_connected) {
+            
+            // --- STEP 1: HOME NETWORK PRIORITIZATION CHECK ---
+            if (wifi_config.sta_home_priority[0] != '\0' && strcmp(wifi_config.sta_home_priority, "disabled") != 0) {
+                
+                // If we are NOT currently connected to the home network
+                if (strcmp(wifi_status.last_attempted_ssid, wifi_config.sta_home_priority) != 0) {
+                    
+                    // Check if 5 minutes have passed
+                    if ((xTaskGetTickCount() - last_home_check) >= home_check_interval) {
+                        
+                        // Protect the Hotspot: Only scan if no clients are connected to WiCAN
+                        if (wifi_status.ap_connected_stations == 0) {
+                            ESP_LOGI(TAG, "5-min check: Targeted scan for Home Priority: %s", wifi_config.sta_home_priority);
+                            
+                            // Targeted scan forces hidden/mesh routers to respond
+                            wifi_scan_config_t target_scan = { 
+                                .ssid = (uint8_t*)wifi_config.sta_home_priority, 
+                                .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+                                .show_hidden = true
+                            };
+
+                            esp_err_t scan_ret = esp_wifi_scan_start(&target_scan, true);
+                            if (scan_ret == ESP_OK) {
+                                uint16_t ap_count = 0;
+                                esp_wifi_scan_get_ap_num(&ap_count);
+                                
+                                if (ap_count > 0) {
+                                    wifi_ap_record_t *ap_records = malloc(sizeof(wifi_ap_record_t) * ap_count);
+                                    if (ap_records && esp_wifi_scan_get_ap_records(&ap_count, ap_records) == ESP_OK) {
+                                        for (int i = 0; i < ap_count; i++) {
+                                            if (strcmp((char*)ap_records[i].ssid, wifi_config.sta_home_priority) == 0) {
+                                                if (ap_records[i].rssi > -75) {
+                                                    ESP_LOGI(TAG, "Home SSID [%s] found at %d dBm! Disconnecting to force switch...", 
+                                                             wifi_config.sta_home_priority, ap_records[i].rssi);
+                                                    esp_wifi_disconnect(); 
+                                                } else {
+                                                     ESP_LOGI(TAG, "Home SSID found, but signal too weak: %d dBm", ap_records[i].rssi);
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (ap_records) free(ap_records);
+                                }
+                                
+                                // Scan succeeded normally, go back to sleep for a full 5 minutes
+                                last_home_check = xTaskGetTickCount();
+                                
+                            } else {
+                                ESP_LOGW(TAG, "Radio busy (err %d). Retrying scan in 15 seconds.", scan_ret);
+                                // Trick the timer into firing again in 15 seconds instead of 5 minutes
+                                last_home_check = xTaskGetTickCount() - home_check_interval + pdMS_TO_TICKS(15000);
+                            }
+                            
+                        } else {
+                            ESP_LOGI(TAG, "Skipping Home SSID scan to prevent dropping connected AP clients.");
+                            // AP is occupied. Trick the timer into firing again in 15 seconds instead of 5 minutes
+                            last_home_check = xTaskGetTickCount() - home_check_interval + pdMS_TO_TICKS(15000);
+                        }
+                    }
+                }
+            }
+            // -------------------------------------------------
+
             vTaskDelay(reconnect_delay);
             continue;
         }
-        
+
+
+
+	
         // Check if we have a disconnection event or if we're already disconnected
         bool should_reconnect = false;
         if (current_bits & WIFI_DISCONNECTED_BIT) {

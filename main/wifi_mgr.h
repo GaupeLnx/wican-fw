@@ -112,6 +112,8 @@ typedef struct {
     
     // Power saving
     wifi_ps_type_t power_save_mode;
+ 
+    char sta_home_priority[33];
 } wifi_mgr_config_t;
 
 // Callback function types
@@ -171,5 +173,7 @@ esp_err_t wifi_mgr_set_callbacks(wifi_mgr_callbacks_t* callbacks);
 
 // Power management
 esp_err_t wifi_mgr_set_power_save_mode(wifi_ps_type_t mode);
+
+
 
 #endif // WIFI_MGR_H

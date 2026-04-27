@@ -2852,14 +2852,27 @@ function openTab(evt, tabName) {
         try { ensureAutomateSubTabInitialized(); } catch(_) {}
     }
     
+    // --- NEW: Initialize Settings Subtabs ---
+    if (tabName === 'wifi_settings') {
+        try { ensureSettingsSubTabInitialized(); } catch(_) {}
+    }
+    // ----------------------------------------
+    
     if (tabName === 'dashboard_tab') {
         loadDashboard();
     } else if (tabName === 'system_tab') {
         if (typeof certManagerLoad === 'function') certManagerLoad();
     } else if (tabName === 'vpn_tab') {
-        // Refresh status so the badge reflects the latest state
         try { checkStatus(); } catch(_) {}
     }
+}
+
+// --- NEW: Helper function to click the default tab ---
+function ensureSettingsSubTabInitialized() {
+    var defaultButton = document.getElementById('settingsSubDefaultOpen');
+    if (!defaultButton) return;
+    // Simulate a click to ensure all other tabs hide and AP Config shows
+    defaultButton.click();
 }
 
 function openAutomateSubTab(evt, tabName) {
@@ -4001,8 +4014,13 @@ async function postConfig() {
 
     // VPN configuration will be sent separately to /vpn/store_config
     // Don't include it in the main config object
-    
+
+    obj["sta_home_priority"] = document.getElementById("home_wifi_priority").value;
+
     var configJSON = JSON.stringify(obj, null, 0);
+
+    console.log("=== EXACT JSON PAYLOAD BEING SENT TO ESP32 ===");
+    console.log(configJSON);
     
     // Send main configuration first
     const xhttp = new XMLHttpRequest();
@@ -4381,6 +4399,17 @@ async function Load() {
     const xhttp = new XMLHttpRequest();
     xhttp.onload = async function() {
         var obj = JSON.parse(this.responseText);
+
+        const savedHomePrio = obj.sta_home_priority || "disabled";
+        const homeSelect = document.getElementById("home_wifi_priority");
+        if (savedHomePrio !== "disabled" && homeSelect) {
+            const opt = document.createElement('option');
+            opt.value = savedHomePrio;
+            opt.textContent = savedHomePrio;
+            homeSelect.appendChild(opt);
+        }
+        if (homeSelect) homeSelect.value = savedHomePrio;
+	
         // Set WiFi mode by value (more robust than selectedIndex)
         const wifiModeEl = document.getElementById("wifi_mode");
         if (wifiModeEl) {
@@ -7663,5 +7692,108 @@ function convertStandardProfile() {
     if (typeof openAutomateSubTab === 'function') {
         const mockEvent = { currentTarget: document.querySelector('.automate-subtablinks[onclick*="automate_groups"]') };
         openAutomateSubTab(mockEvent, 'automate_groups');
+    }
+}
+
+// --- 1. Add the new scanning function ---
+async function scanHomeWifiNetworks() {
+    const scanBtn = document.getElementById('scan_home_button');
+    const homeSelect = document.getElementById('home_wifi_priority');
+    const currentVal = homeSelect.value; // Preserve what is currently selected
+    
+    try {
+        scanBtn.disabled = true;
+        scanBtn.textContent = "Scanning...";
+        
+        const response = await fetch('/wifi_scan');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.text();
+        
+        // Reset the dropdown but keep "Disabled"
+        homeSelect.innerHTML = '<option value="disabled">Disabled</option>';
+        
+        if (data && data !== "NONE") {
+            const scanResult = JSON.parse(data);
+            if (scanResult.error) throw new Error(scanResult.error);
+            
+            if (scanResult.networks && Array.isArray(scanResult.networks)) {
+                const validNetworks = scanResult.networks
+                    .filter(n => n.ssid && n.ssid.trim() !== '')
+                    .sort((a, b) => b.rssi - a.rssi);
+                
+                const seenSSIDs = new Set();
+                let foundCurrent = false;
+
+                validNetworks.forEach(network => {
+                    if (!seenSSIDs.has(network.ssid)) {
+                        seenSSIDs.add(network.ssid);
+                        const option = document.createElement('option');
+                        option.value = network.ssid;
+                        option.textContent = `${network.ssid} (${network.rssi} dBm)`;
+                        homeSelect.appendChild(option);
+                        
+                        if (network.ssid === currentVal) foundCurrent = true;
+                    }
+                });
+
+                // If the previously saved network wasn't in range during the scan, re-add it so we don't lose it
+                if (currentVal !== "disabled" && !foundCurrent) {
+                    const opt = document.createElement('option');
+                    opt.value = currentVal;
+                    opt.textContent = `${currentVal} (Saved)`;
+                    homeSelect.appendChild(opt);
+                }
+                
+                showNotification(`Found ${seenSSIDs.size} networks`, "green");
+            }
+        } else {
+            showNotification("No networks found", "yellow");
+        }
+    } catch (error) {
+        showNotification("WiFi scan failed: " + error.message, "red");
+    } finally {
+        scanBtn.disabled = false;
+        scanBtn.textContent = "Scan";
+    }
+}
+
+
+
+function openSettingsSubTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    
+    // Hide all tab content
+    tabcontent = document.getElementsByClassName("settings-subtabcontent");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = "none";
+    }
+    
+    // Remove the background color of all tablinks/buttons
+    tablinks = document.getElementsByClassName("settings-subtablinks");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+    }
+    
+    // Show the specific tab content
+    document.getElementById(tabName).style.display = "block";
+    
+    // Add the "active" class to the button that opened the tab
+    if (evt && evt.currentTarget) {
+        evt.currentTarget.className += " active";
+    }
+}
+
+// Update your MQTT visibility toggle to handle the warning div natively:
+function toggleMqttVisibility() {
+    var mqttSelect = document.getElementById("mqtt_en");
+    var mqttDiv = document.getElementById("mqtt_en_div");
+    var mqttWarning = document.getElementById("mqtt_warning_div");
+    
+    if (mqttSelect.value === "enable") {
+        mqttDiv.style.display = "block";
+        mqttWarning.style.display = "block";
+    } else {
+        mqttDiv.style.display = "none";
+        mqttWarning.style.display = "none";
     }
 }

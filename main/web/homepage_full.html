@@ -133,6 +133,42 @@
             color: var(--white);
         }
 
+
+.settings-subtabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .settings-subtablinks {
+            border: 1px solid var(--gray-200);
+            background-color: var(--white);
+            color: var(--gray-700);
+            padding: 0.7rem 1.1rem;
+            min-height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .settings-subtablinks:hover {
+            background-color: var(--gray-100);
+            color: var(--primary-color);
+        }
+
+        .settings-subtablinks.active {
+            background-color: var(--primary-color) !important;
+            border-color: var(--primary-color) !important;
+            color: var(--white) !important;
+        }
+
+        .settings-subtabcontent {
+            display: none;
+        }	
+
         .automate-subtabcontent {
             display: none;
         }
@@ -951,73 +987,85 @@
         </div>
 
         <div id="wifi_settings" class="tabcontent">
+            <div class="section-title">WiCAN Pro Settings</div>
+
             <form id="configForm" name="configForm" action="/action_page" onchange="submit_enable();">
-                <div class="section-title">AP Config</div>
-                <table class="form-table">
-                    <tr>
-                        <td>Mode:</td>
-                        <td>
-                            <select name="wifi_mode" id="wifi_mode" onchange="toggleSmartConnectConfig(); toggleApStationWarning(); submit_enable();">
-                                <option value="AP">AP Mode</option>
-                                <option value="APStation">AP+Station</option>
-                                <option value="BLEStation">BLE+Station</option>
-                                <option value="Station">Station Mode</option>
-                                <!-- <option value="SmartConnect">SmartConnect</option> -->
-                            </select>
-                        </td>
-                    </tr>
-                    <tr style="height: 8px;">
-                        <td style="padding-top:0px; padding-bottom:0px;"></td>
-                        <td style="padding-top:0px; padding-bottom:0px;">
-                            <div id="sta_ble_info" style="display:none;color:#6b7280; font-size: 12px; margin-top: 0px;">Device AP will be disabled. Press and hold the button for 5 seconds to re-enable.</div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>AP Channel:</td>
-                        <td>
-                            <select name="ap_ch_value" id="ap_ch_value">
-                                <option value="1">1</option>
-                                <option value="2">2</option>
-                                <option value="3">3</option>
-                                <option value="4">4</option>
-                                <option value="5">5</option>
-                                <option value="6">6</option>
-                                <option value="7">7</option>
-                                <option value="8">8</option>
-                                <option value="9">9</option>
-                                <option value="10">10</option>
-                                <option value="11">11</option>
-                                <option value="12">12</option>
-                                <option value="13">13</option>
-                                <option value="14">14</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>AP SSID:</td>
-                        <td>
-                            <div style="display:flex; align-items:center; gap:10px; flex-wrap:nowrap;">
-                                <input type="text" id="ap_ssid_value" name="ap_ssid_value" placeholder="WiCAN_MyCar" minlength="3" maxlength="32" disabled oninput="validateApSsid(); submit_enable();" />
-                                <input type="checkbox" id="ap_ssid_enable" onchange="toggleApSsid(); submit_enable();" style="margin:0;" />
-                            </div>
-                            <div style="color:#6b7280; font-size: 12px; margin-top: 4px;">Min 3, max 32 characters. When disabled, the device uses its default unique SSID.</div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>AP Password:</td>
-                        <td>
-                            <input type="text" id="ap_pass_value" name="ap_pass_value" value="Testpass" />
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>Auto-Disable AP:</td>
-                        <td>
-                            <select name="ap_auto_disable" id="ap_auto_disable" onchange="toggleApStationWarning(); submit_enable();">
-                                <option value="enable">Enable</option>
-                                <option value="disable">Disable</option>
-                            </select>
-                        </td>
-                    </tr>
+                
+                <div class="settings-subtabs">
+                    <button type="button" class="settings-subtablinks active" id="settingsSubDefaultOpen" onclick="openSettingsSubTab(event, 'settings_ap')">AP Config</button>
+                    <button type="button" class="settings-subtablinks" onclick="openSettingsSubTab(event, 'settings_network')">Network Config</button>
+                    <button type="button" class="settings-subtablinks" onclick="openSettingsSubTab(event, 'settings_ble')">BLE</button>
+                    <button type="button" class="settings-subtablinks" onclick="openSettingsSubTab(event, 'settings_can')">CAN</button>
+                    <button type="button" class="settings-subtablinks" onclick="openSettingsSubTab(event, 'settings_mqtt')">MQTT</button>
+                </div>
+
+                <div id="settings_ap" class="settings-subtabcontent" style="display: block;">
+                    <table class="form-table">
+                        <tr>
+                            <td>Mode:</td>
+                            <td>
+                                <select name="wifi_mode" id="wifi_mode" onchange="toggleSmartConnectConfig(); toggleApStationWarning(); submit_enable();">
+                                    <option value="AP">AP Mode</option>
+                                    <option value="APStation">AP+Station</option>
+                                    <option value="BLEStation">BLE+Station</option>
+                                    <option value="Station">Station Mode</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr style="height: 8px;">
+                            <td style="padding-top:0px; padding-bottom:0px;"></td>
+                            <td style="padding-top:0px; padding-bottom:0px;">
+                                <div id="sta_ble_info" style="display:none;color:#6b7280; font-size: 12px; margin-top: 0px;">Device AP will be disabled. Press and hold the button for 5 seconds to re-enable.</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>AP Channel:</td>
+                            <td>
+                                <select name="ap_ch_value" id="ap_ch_value">
+                                    <option value="1">1</option>
+                                    <option value="2">2</option>
+                                    <option value="3">3</option>
+                                    <option value="4">4</option>
+                                    <option value="5">5</option>
+                                    <option value="6">6</option>
+                                    <option value="7">7</option>
+                                    <option value="8">8</option>
+                                    <option value="9">9</option>
+                                    <option value="10">10</option>
+                                    <option value="11">11</option>
+                                    <option value="12">12</option>
+                                    <option value="13">13</option>
+                                    <option value="14">14</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>AP SSID:</td>
+                            <td>
+                                <div style="display:flex; align-items:center; gap:10px; flex-wrap:nowrap;">
+                                    <input type="text" id="ap_ssid_value" name="ap_ssid_value" placeholder="WiCAN_MyCar" minlength="3" maxlength="32" disabled oninput="validateApSsid(); submit_enable();" />
+                                    <input type="checkbox" id="ap_ssid_enable" onchange="toggleApSsid(); submit_enable();" style="margin:0;" />
+                                </div>
+                                <div style="color:#6b7280; font-size: 12px; margin-top: 4px;">Min 3, max 32 characters. When disabled, the device uses its default unique SSID.</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>AP Password:</td>
+                            <td>
+                                <input type="text" id="ap_pass_value" name="ap_pass_value" value="Testpass" />
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Auto-Disable AP:</td>
+                            <td>
+                                <select name="ap_auto_disable" id="ap_auto_disable" onchange="toggleApStationWarning(); submit_enable();">
+                                    <option value="enable">Enable</option>
+                                    <option value="disable">Disable</option>
+                                </select>
+                            </td>
+                        </tr>
+                    </table>
+                    
                     <div id="apstation_warning_div" style="display: none; margin: 8px 0;">
                         <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <div style="display: flex; align-items: center; margin-bottom: 6px;">
@@ -1037,435 +1085,415 @@
                             </div>
                         </div>
                     </div>
-                </table>
 
-                <!-- SmartConnect Configuration -->
-                <div id="smartconnect_config" style="display: none;">
-                    <div class="divider"></div>
-                    <div class="section-title">SmartConnect Configuration</div>
-                    
-                    <!-- Home Mode Configuration -->
-                    <div class="divider"></div>
-                    <div class="section-title" style="font-size: 1.25rem; color: #2563eb; border-bottom: 2px solid #93c5fd; padding-bottom: 0.25rem; display: flex; align-items: center; gap: 8px;">
-                        <span data-lucide="home" style="width: 20px; height: 20px;"></span>
-                        Home Mode
-                    </div>
-                    <table class="form-table">
-                        <tr>
-                            <td>Home SSID:</td>
-                            <td>
-                                <input type="text" id="home_ssid" name="home_ssid" value="MeatPi" oninput="submit_enable();" />
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Home Password:</td>
-                            <td>
-                                <input type="text" id="home_password" name="home_password" value="TomatoSauce" oninput="submit_enable();" />
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Home Security:</td>
-                            <td>
-                                <select id="home_security" name="home_security" onchange="submit_enable();">
-                                    <option value="wpa3">WPA3</option>
-                                    <option value="wpa2">WPA2</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Home Protocol:</td>
-                            <td>
-                                <select id="home_protocol" name="home_protocol" onchange="submit_enable();">
-                                    <option value="elm327">elm327</option>
-                                    <option value="auto_pid">AutoPID</option>
-                                </select>
-                            </td>
-                        </tr>
-                    </table>
-                    
-                    <!-- Drive Mode Configuration -->
-                    <div class="divider"></div>
-                    <div class="section-title" style="font-size: 1.25rem; color: #059669; border-bottom: 2px solid #6ee7b7; padding-bottom: 0.25rem; display: flex; align-items: center; gap: 8px;">
-                        <span data-lucide="car" style="width: 20px; height: 20px;"></span>
-                        Drive Mode
-                    </div>
-                    <table class="form-table">
-                        <tr>
-                            <td>Drive Connection Type:</td>
-                            <td>
-                                <select name="drive_connection_type" id="drive_connection_type" onchange="toggleDriveConfig(); submit_enable();">
-                                    <option value="wifi">WiFi</option>
-                                    <option value="ble">BLE</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr id="drive_wifi_config">
-                            <td>Drive SSID:</td>
-                            <td>
-                                <input type="text" id="drive_ssid" name="drive_ssid" value="MeatPi" oninput="submit_enable();" />
-                            </td>
-                        </tr>
-                        <tr id="drive_wifi_password">
-                            <td>Drive Password:</td>
-                            <td>
-                                <input type="text" id="drive_password" name="drive_password" value="TomatoSauce" oninput="submit_enable();" />
-                            </td>
-                        </tr>
-                        <tr id="drive_wifi_security">
-                            <td>Drive Security:</td>
-                            <td>
-                                <select id="drive_security" name="drive_security" onchange="submit_enable();">
-                                    <option value="wpa3">WPA3</option>
-                                    <option value="wpa2">WPA2</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Drive Protocol:</td>
-                            <td>
-                                <select id="drive_protocol" name="drive_protocol" onchange="submit_enable();">
-                                    <option value="elm327">elm327</option>
-                                    <option value="auto_pid">AutoPID</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Drive Mode Timeout:</td>
-                            <td class="slider-container">
-                                <input type="range" 
-                                       id="drive_mode_timeout" 
-                                       name="drive_mode_timeout" 
-                                       value="60" 
-                                       min="10" 
-                                       max="600" 
-                                       step="1"
-                                       oninput="document.getElementById('drive_mode_timeout_value').textContent = this.value;submit_enable();">
-                                <span id="drive_mode_timeout_value">60</span>sec
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-
-                <div class="divider"></div>
-
-                <!-- Network Configuration Section -->
-                <div id="station_config_section">
-                    <div class="section-title">Network Configuration</div>
-                    <table class="form-table">
-                        <tr>
-                            <td>MAC Address:</td>
-                            <td>
-                                <div id="mac_address_value" style="font-family: monospace; font-weight: 600; color: #475569; padding: 0.25rem 0;">N/A</div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>SSID:</td>
-                            <td>
-                                <div class="wifi-scan-container">
-                                    <input type="text" id="ssid_value" name="ssid_value" value="MeatPi" disabled />
-                                    <button type="button" id="wifi_scan_button" onclick="scanWifiNetworks()" disabled>Scan</button>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr id="wifi_networks_row" style="display: none;">
-                            <td>Available Networks:</td>
-                            <td>
-                                <select id="wifi_networks_list" onchange="selectWifiNetwork()">
-                                    <option value="">Select a network...</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Password:</td>
-                            <td>
-                                <input type="text" id="pass_value" name="pass_value" value="TomatoSauce" disabled />
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>Security:</td>
-                            <td>
-                                <select id="sta_security" name="sta_security" disabled>
-                                    <option value="wpa3">WPA3</option>
-                                    <option value="wpa2">WPA2</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td>IP Assignment:</td>
-                            <td>
-                                <select id="sta_ip_type" name="sta_ip_type" onchange="toggleStaStaticIp(); submit_enable();">
-                                    <option value="dhcp">DHCP (Default)</option>
-                                    <option value="static">Static IP</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr class="sta-static-row" style="display:none;">
-                            <td>Static IP:</td>
-                            <td><input type="text" id="sta_static_ip" name="sta_static_ip" placeholder="192.168.1.50" oninput="submit_enable();"></td>
-                        </tr>
-                        <tr class="sta-static-row" style="display:none;">
-                            <td>Subnet Mask:</td>
-                            <td><input type="text" id="sta_netmask" name="sta_netmask" placeholder="255.255.255.0" oninput="submit_enable();"></td>
-                        </tr>
-                        <tr class="sta-static-row" style="display:none;">
-                            <td>Gateway:</td>
-                            <td><input type="text" id="sta_gateway" name="sta_gateway" placeholder="192.168.1.1" oninput="submit_enable();"></td>
-                        </tr>
-                        <tr class="sta-static-row" style="display:none;">
-                            <td>DNS Server:</td>
-                            <td><input type="text" id="sta_dns" name="sta_dns" placeholder="8.8.8.8" oninput="submit_enable();"></td>
-                        </tr>
-                    </table>
-
-                    <div class="divider"></div>
-                    <div class="section-title">Backup Networks <span style="font-weight: normal; font-size: 0.9rem; color: #6b7280;">(max 5)</span></div>
-                    <div id="fallback_networks_container">
-                        <div id="fallback_rows"></div>
-                        <div class="button-group">
-                            <button type="button" id="add_fallback_button" onclick="addFallbackNetworkRow()">Add SSID</button>
+                    <div id="smartconnect_config" style="display: none;">
+                        <div class="divider"></div>
+                        <div class="section-title">SmartConnect Configuration</div>
+                        
+                        <div class="divider"></div>
+                        <div class="section-title" style="font-size: 1.25rem; color: #2563eb; border-bottom: 2px solid #93c5fd; padding-bottom: 0.25rem; display: flex; align-items: center; gap: 8px;">
+                            <span data-lucide="home" style="width: 20px; height: 20px;"></span>
+                            Home Mode
                         </div>
-                        <div style="color:#6b7280; font-size: 12px; margin-top: 6px;">These SSIDs are used as backup networks if the primary station fails.</div>
-                    </div>
-                </div>
-                
-                <div class="divider"></div>
-
-                <div class="section-title">BLE</div>
-                <table class="form-table">
-                    <tr>
-                        <td>Passkey:</td>
-                        <td>
-                            <input type="number" id="ble_pass_value" name="ble_pass_value" value="000000" min="0" max="999999" />
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>BLE Status:</td>
-                        <td>
-                            <select name="ble_status" id="ble_status" onchange="submit_enable();">
-                                <option value="enable">Enable</option>
-                                <option value="disable" selected>Disable</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>BLE Power:</td>
-                        <td class="slider-container">
-                            <input type="range"
-                                   id="ble_power"
-                                   name="ble_power"
-                                   value="9"
-                                   min="-12"
-                                   max="9"
-                                   step="3"
-                                   oninput="document.getElementById('ble_power_value').textContent = this.value;submit_enable();">
-                            <span id="ble_power_value">9</span>dBm
-                        </td>
-                    </tr>
-                </table>
-
-                <div id="ble_warning_div" style="display: none; margin: 8px 0;">
-                    <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <div style="display: flex; align-items: center; margin-bottom: 6px;">
-                            <span data-lucide="alert-triangle" style="font-size: 16px; margin-right: 8px;"></span>
-                            <strong style="color: #92400e; font-size: 14px;">BLE Connection Warning</strong>
-                        </div>
-                        <div style="color: #78350f; font-size: 13px; line-height: 1.4;">
-                            When BLE connects, WiFi AP is disabled. To restore WiFi AP: disconnect BLE and power cycle device.
-                        </div>
-                    </div>
-                </div>
-
-                <div class="divider"></div>
-
-                <div class="section-title">CAN</div>
-                <table class="form-table">
-                    <tr>
-                        <td>CAN Bitrate:</td>
-                        <td>
-                            <select name="can_datarate" id="can_datarate">
-                                <option value="5K">5K</option>
-                                <option value="10K">10K</option>
-                                <option value="20K">20K</option>
-                                <option value="25K">25K</option>
-                                <option value="50K">50K</option>
-                                <option value="100K">100K</option>
-                                <option value="125K">125K</option>
-                                <option value="250K">250K</option>
-                                <option value="500K">500K</option>
-                                <option value="800K">800K</option>
-                                <option value="1000K">1000K</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>CAN Mode:</td>
-                        <td>
-                            <select name="can_mode" id="can_mode">
-                                <option value="normal" selected="selected">Normal</option>
-                                <option value="silent">Silent</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>Port Type:</td>
-                        <td>
-                            <select name="port_type" id="port_type">
-                                <option value="tcp">TCP</option>
-                                <option value="udp">UDP</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>TCP/UDP Port:</td>
-                        <td>
-                            <input type="number" id="tcp_port_value" name="tcp_port_value" value="3333" min="1" max="65535" />
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>Protocol:</td>
-                        <td>
-                            <select name="protocol" id="protocol">
-                                <option value="realdash66">realdash66</option>
-                                <option value="slcan">slcan</option>
-                                <option value="savvycan">savvyCAN</option>
-                                <option value="elm327">elm327</option>
-                                <option value="auto_pid">AutoPID</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>MQTT:</td>
-                        <td>
-                            <select name="mqtt_en" id="mqtt_en">
-                                <option value="enable">Enable</option>
-                                <option value="disable" selected>Disable</option>
-                            </select>
-                        </td>
-                    </tr>
-                </table>
-
-                <div id="mqtt_warning_div" style="display: none; margin: 8px 0;">
-                    <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <div style="display: flex; align-items: center; margin-bottom: 6px;">
-                            <span data-lucide="alert-triangle" style="font-size: 16px; margin-right: 8px;"></span>
-                            <strong style="color: #92400e; font-size: 14px;">MQTT Connection Warning</strong>
-                        </div>
-                        <div style="color: #78350f; font-size: 13px; line-height: 1.4;">
-                            Do NOT connect to public MQTT brokers. Only use a private/local broker or a trusted cloud service.
-                        </div>
-                    </div>
-                </div>
-
-                <div id="mqtt_en_div">
-                    <div class="divider"></div>
-                    <div class="section-title">MQTT</div>
-                    <table class="form-table">
-                        <tr>
-                            <td><label for="mqtt_url"><b>MQTT URL:</b></label></td>
-                            <td><input type="text" id="mqtt_url" name="mqtt_url" value="127.0.0.1" /></td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_port"><b>MQTT Port:</b></label></td>
-                            <td><input type="number" id="mqtt_port" name="mqtt_port" style="width: 180px;" value="1883" min="1" max="65535" />
-                            </td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_security"><b>Security:</b></label></td>
-                            <td>
-                                <select id="mqtt_security" name="mqtt_security" style="width: 180px;" onchange="toggleMqttTLS();submit_enable();">
-                                    <option value="none" selected>None (MQTT)</option>
-                                    <option value="tls">TLS (MQTTS)</option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr id="mqtt_cert_set_row" style="display:none;">
-                            <td><label for="mqtt_cert_set"><b>Cert Set:</b></label></td>
-                            <td>
-                                <select id="mqtt_cert_set" name="mqtt_cert_set" style="width: 180px;" onchange="submit_enable();">
-                                    <option value="default">default</option>
-                                </select>
-                                <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Manage sets under System â†’ Certificate Manager.</div>
-                            </td>
-                        </tr>
-                        <tr id="mqtt_skip_cn_row" style="display:none;">
-                            <td><label for="mqtt_skip_cn"><b>Skip CN check:</b></label></td>
-                            <td>
-                                <select id="mqtt_skip_cn" name="mqtt_skip_cn" style="width: 180px;" onchange="submit_enable();">
-                                    <option value="disable" selected>Disable</option>
-                                    <option value="enable">Enable</option>
-                                </select>
-                                <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">When enabled, TLS server certificate common-name/hostname mismatch is ignored.</div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_user"><b>MQTT User:</b></label></td>
-                            <td><input type="text" id="mqtt_user" name="mqtt_user" value="meatpi" /></td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_pass"><b>MQTT Pass:</b></label></td>
-                            <td><input type="text" id="mqtt_pass" name="mqtt_pass" value="meatpi" /></td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_tx_topic"><b>TX Topic:</b></label></td>
-                            <td><input type="text" id="mqtt_tx_topic" name="mqtt_tx_topic" value="" /></td>
-                            <td><input type="checkbox" id="mqtt_tx_en_checkbox" name="mqtt_tx_en_checkbox"
-                                    onchange="txCheckBoxChanged()"></td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_rx_topic"><b>RX Topic:</b></label></td>
-                            <td><input type="text" id="mqtt_rx_topic" name="mqtt_rx_topic" value="" /></td>
-                            <td><input type="checkbox" id="mqtt_rx_en_checkbox" name="mqtt_rx_en_checkbox" 
-                                    onchange="rxCheckBoxChanged()"></td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_status_topic"><b>Status Topic:</b></label></td>
-                            <td><input type="text" id="mqtt_status_topic" name="mqtt_status_topic" value="" /></td>
-                        </tr>
-                        <tr>
-                            <td><label for="mqtt_elm327_log"><b>MQTT elm327 log:</b></label></td>
-                            <td><select name="mqtt_elm327_log" style="width: 93px;" id="mqtt_elm327_log"
-                                    onchange="alert_elm327()">
-                                    <option value="enable">Enable</option>
-                                    <option value="disable">Disable</option>
-                                </select></td>
-                        </tr>
-                        <tr>
-                            <td>&nbsp;</td>
-                            <td>&nbsp;</td>
-                        </tr>
-                    </table>
-                    <div style="overflow-x:auto;">
-                        <div class="section-title">MQTT CAN Filter</div>
-                        <table id="can_flt_table" >
+                        <table class="form-table">
                             <tr>
-                                <th style="text-align: left;">CAN ID (dec)</th>
-                                <th style="text-align: left;">Name</th>
-                                <th style="text-align: left;">PID</th>
-                                <th style="text-align: left;">Index</th>
-                                <th style="text-align: left;">Start Bit</th>
-                                <th style="text-align: left;">Bit Length</th>
-                                <th style="text-align: left;">Expression</th>
-                                <th style="text-align: left;">Cycle ms</th>
-                                <th><input id="store_canflt_button" name="store_canflt_button" type="button"
-                                        onclick="storeCANFLT()" value="Store" style="width: 100%;" /></th>
+                                <td>Home SSID:</td>
+                                <td><input type="text" id="home_ssid" name="home_ssid" value="MeatPi" oninput="submit_enable();" /></td>
                             </tr>
                             <tr>
-                                <td style="width: 10%;" ><input type="number" id="canId" min="0" max="536870912" style="width: 80%;"/></td>
-                                <td style="width: 20%;"><input type="text" id="name" maxlength="16" style="width: 90%;"/></td>
-                                <td style="width: 10%;"><input type="number" id="pid"  style="width: 80%;"/></td>
-                                <td style="width: 10%;"><input type="number" id="pindex"  style="width: 80%;"/></td>
-                                <td style="width: 10%;"><input type="number" id="startBit" min="0" max="63"  style="width: 80%;"/></td>
-                                <td style="width: 10%;"><input type="number" id="bitLength" min="1" max="64" style="width: 80%;"/></td>
-                                <td style="width: 20%;"><input type="text" id="expression" maxlength="64"  style="width: 90%;"/></td>
-                                <td style="width: 10%;"><input type="number" id="cycle" min="100" max="1000"  style="width: 80%;"/></td>
-                                <td><input id="add_row_button" name="add_row_button" type="button" onclick="addCANFLTRow()"
-                                        value="Add ID" style="width: 100%;" /></td>
+                                <td>Home Password:</td>
+                                <td><input type="text" id="home_password" name="home_password" value="TomatoSauce" oninput="submit_enable();" /></td>
+                            </tr>
+                            <tr>
+                                <td>Home Security:</td>
+                                <td>
+                                    <select id="home_security" name="home_security" onchange="submit_enable();">
+                                        <option value="wpa3">WPA3</option>
+                                        <option value="wpa2">WPA2</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Home Protocol:</td>
+                                <td>
+                                    <select id="home_protocol" name="home_protocol" onchange="submit_enable();">
+                                        <option value="elm327">elm327</option>
+                                        <option value="auto_pid">AutoPID</option>
+                                    </select>
+                                </td>
+                            </tr>
+                        </table>
+                        
+                        <div class="divider"></div>
+                        <div class="section-title" style="font-size: 1.25rem; color: #059669; border-bottom: 2px solid #6ee7b7; padding-bottom: 0.25rem; display: flex; align-items: center; gap: 8px;">
+                            <span data-lucide="car" style="width: 20px; height: 20px;"></span>
+                            Drive Mode
+                        </div>
+                        <table class="form-table">
+                            <tr>
+                                <td>Drive Connection Type:</td>
+                                <td>
+                                    <select name="drive_connection_type" id="drive_connection_type" onchange="toggleDriveConfig(); submit_enable();">
+                                        <option value="wifi">WiFi</option>
+                                        <option value="ble">BLE</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr id="drive_wifi_config">
+                                <td>Drive SSID:</td>
+                                <td><input type="text" id="drive_ssid" name="drive_ssid" value="MeatPi" oninput="submit_enable();" /></td>
+                            </tr>
+                            <tr id="drive_wifi_password">
+                                <td>Drive Password:</td>
+                                <td><input type="text" id="drive_password" name="drive_password" value="TomatoSauce" oninput="submit_enable();" /></td>
+                            </tr>
+                            <tr id="drive_wifi_security">
+                                <td>Drive Security:</td>
+                                <td>
+                                    <select id="drive_security" name="drive_security" onchange="submit_enable();">
+                                        <option value="wpa3">WPA3</option>
+                                        <option value="wpa2">WPA2</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Drive Protocol:</td>
+                                <td>
+                                    <select id="drive_protocol" name="drive_protocol" onchange="submit_enable();">
+                                        <option value="elm327">elm327</option>
+                                        <option value="auto_pid">AutoPID</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Drive Mode Timeout:</td>
+                                <td class="slider-container">
+                                    <input type="range" id="drive_mode_timeout" name="drive_mode_timeout" value="60" min="10" max="600" step="1" oninput="document.getElementById('drive_mode_timeout_value').textContent = this.value;submit_enable();">
+                                    <span id="drive_mode_timeout_value">60</span>sec
+                                </td>
                             </tr>
                         </table>
                     </div>
                 </div>
+
+                <div id="settings_network" class="settings-subtabcontent" style="display: none;">
+                    <div id="station_config_section">
+                        <table class="form-table">
+                            <tr>
+                                <td>MAC Address:</td>
+                                <td><div id="mac_address_value" style="font-family: monospace; font-weight: 600; color: #475569; padding: 0.25rem 0;">N/A</div></td>
+                            </tr>
+                            <tr>
+                                <td>SSID:</td>
+                                <td>
+                                    <div class="wifi-scan-container">
+                                        <input type="text" id="ssid_value" name="ssid_value" value="MeatPi" disabled />
+                                        <button type="button" id="wifi_scan_button" onclick="scanWifiNetworks()" disabled>Scan</button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr id="wifi_networks_row" style="display: none;">
+                                <td>Available Networks:</td>
+                                <td>
+                                    <select id="wifi_networks_list" onchange="selectWifiNetwork()">
+                                        <option value="">Select a network...</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Password:</td>
+                                <td><input type="text" id="pass_value" name="pass_value" value="TomatoSauce" disabled /></td>
+                            </tr>
+                            <tr>
+                                <td>Security:</td>
+                                <td>
+                                    <select id="sta_security" name="sta_security" disabled>
+                                        <option value="wpa3">WPA3</option>
+                                        <option value="wpa2">WPA2</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>IP Assignment:</td>
+                                <td>
+                                    <select id="sta_ip_type" name="sta_ip_type" onchange="toggleStaStaticIp(); submit_enable();">
+                                        <option value="dhcp">DHCP (Default)</option>
+                                        <option value="static">Static IP</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr class="sta-static-row" style="display:none;">
+                                <td>Static IP:</td>
+                                <td><input type="text" id="sta_static_ip" name="sta_static_ip" placeholder="192.168.1.50" oninput="submit_enable();"></td>
+                            </tr>
+                            <tr class="sta-static-row" style="display:none;">
+                                <td>Subnet Mask:</td>
+                                <td><input type="text" id="sta_netmask" name="sta_netmask" placeholder="255.255.255.0" oninput="submit_enable();"></td>
+                            </tr>
+                            <tr class="sta-static-row" style="display:none;">
+                                <td>Gateway:</td>
+                                <td><input type="text" id="sta_gateway" name="sta_gateway" placeholder="192.168.1.1" oninput="submit_enable();"></td>
+                            </tr>
+                            <tr class="sta-static-row" style="display:none;">
+                                <td>DNS Server:</td>
+                                <td><input type="text" id="sta_dns" name="sta_dns" placeholder="8.8.8.8" oninput="submit_enable();"></td>
+                            </tr>
+                        </table>
+
+                        <div class="divider"></div>
+                        <div class="section-title">Backup Networks <span style="font-weight: normal; font-size: 0.9rem; color: #6b7280;">(max 5)</span></div>
+                        <div id="fallback_networks_container">
+                            <div id="fallback_rows"></div>
+                            <div class="button-group">
+                                <button type="button" id="add_fallback_button" onclick="addFallbackNetworkRow()">Add SSID</button>
+                            </div>
+                            <div style="color:#6b7280; font-size: 12px; margin-top: 6px;">These SSIDs are used as backup networks if the primary station fails.</div>
+                        </div>
+                    </div>
+                    
+                    <div class="divider"></div>
+                    <div class="section-title">Home Network Prioritization</div>
+                    <table class="form-table">
+                        <tr>
+                            <td>Home Priority SSID:</td>
+                            <td>
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <select id="home_wifi_priority" name="home_wifi_priority" onchange="submit_enable(); enableAutoStoreButton();" style="flex:1;">
+                                        <option value="disabled" selected>Disabled</option>
+                                    </select>
+                                    <button type="button" id="scan_home_button" onclick="scanHomeWifiNetworks()">Scan</button>
+                                </div>
+                                <div style="color:#6b7280; font-size: 12px; margin-top: 6px;">
+                                    Device scans every 5 minutes. If this SSID is found with good signal (> -75 dBm), it auto-switches. The SSID must be configured in Primary or Backup networks.
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div id="settings_ble" class="settings-subtabcontent" style="display: none;">
+                    <table class="form-table">
+                        <tr>
+                            <td>Passkey:</td>
+                            <td><input type="number" id="ble_pass_value" name="ble_pass_value" value="000000" min="0" max="999999" /></td>
+                        </tr>
+                        <tr>
+                            <td>BLE Status:</td>
+                            <td>
+                                <select name="ble_status" id="ble_status" onchange="submit_enable();">
+                                    <option value="enable">Enable</option>
+                                    <option value="disable" selected>Disable</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>BLE Power:</td>
+                            <td class="slider-container">
+                                <input type="range" id="ble_power" name="ble_power" value="9" min="-12" max="9" step="3" oninput="document.getElementById('ble_power_value').textContent = this.value;submit_enable();">
+                                <span id="ble_power_value">9</span>dBm
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div id="ble_warning_div" style="display: none; margin: 8px 0;">
+                        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <div style="display: flex; align-items: center; margin-bottom: 6px;">
+                                <span data-lucide="alert-triangle" style="font-size: 16px; margin-right: 8px;"></span>
+                                <strong style="color: #92400e; font-size: 14px;">BLE Connection Warning</strong>
+                            </div>
+                            <div style="color: #78350f; font-size: 13px; line-height: 1.4;">
+                                When BLE connects, WiFi AP is disabled. To restore WiFi AP: disconnect BLE and power cycle device.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="settings_can" class="settings-subtabcontent" style="display: none;">
+                    <table class="form-table">
+                        <tr>
+                            <td>CAN Bitrate:</td>
+                            <td>
+                                <select name="can_datarate" id="can_datarate">
+                                    <option value="5K">5K</option>
+                                    <option value="10K">10K</option>
+                                    <option value="20K">20K</option>
+                                    <option value="25K">25K</option>
+                                    <option value="50K">50K</option>
+                                    <option value="100K">100K</option>
+                                    <option value="125K">125K</option>
+                                    <option value="250K">250K</option>
+                                    <option value="500K">500K</option>
+                                    <option value="800K">800K</option>
+                                    <option value="1000K">1000K</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>CAN Mode:</td>
+                            <td>
+                                <select name="can_mode" id="can_mode">
+                                    <option value="normal" selected="selected">Normal</option>
+                                    <option value="silent">Silent</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Port Type:</td>
+                            <td>
+                                <select name="port_type" id="port_type">
+                                    <option value="tcp">TCP</option>
+                                    <option value="udp">UDP</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>TCP/UDP Port:</td>
+                            <td><input type="number" id="tcp_port_value" name="tcp_port_value" value="3333" min="1" max="65535" /></td>
+                        </tr>
+                        <tr>
+                            <td>Protocol:</td>
+                            <td>
+                                <select name="protocol" id="protocol">
+                                    <option value="realdash66">realdash66</option>
+                                    <option value="slcan">slcan</option>
+                                    <option value="savvycan">savvyCAN</option>
+                                    <option value="elm327">elm327</option>
+                                    <option value="auto_pid">AutoPID</option>
+                                </select>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div id="settings_mqtt" class="settings-subtabcontent" style="display: none;">
+                    <table class="form-table">
+                        <tr>
+                            <td>MQTT:</td>
+                            <td>
+                                <select name="mqtt_en" id="mqtt_en" onchange="submit_enable(); toggleMqttVisibility();">
+                                    <option value="enable">Enable</option>
+                                    <option value="disable" selected>Disable</option>
+                                </select>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div id="mqtt_warning_div" style="display: none; margin: 8px 0;">
+                        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <div style="display: flex; align-items: center; margin-bottom: 6px;">
+                                <span data-lucide="alert-triangle" style="font-size: 16px; margin-right: 8px;"></span>
+                                <strong style="color: #92400e; font-size: 14px;">MQTT Connection Warning</strong>
+                            </div>
+                            <div style="color: #78350f; font-size: 13px; line-height: 1.4;">
+                                Do NOT connect to public MQTT brokers. Only use a private/local broker or a trusted cloud service.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="mqtt_en_div">
+                        <table class="form-table">
+                            <tr>
+                                <td><label for="mqtt_url"><b>MQTT URL:</b></label></td>
+                                <td><input type="text" id="mqtt_url" name="mqtt_url" value="127.0.0.1" /></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_port"><b>MQTT Port:</b></label></td>
+                                <td><input type="number" id="mqtt_port" name="mqtt_port" style="width: 180px;" value="1883" min="1" max="65535" /></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_security"><b>Security:</b></label></td>
+                                <td>
+                                    <select id="mqtt_security" name="mqtt_security" style="width: 180px;" onchange="toggleMqttTLS();submit_enable();">
+                                        <option value="none" selected>None (MQTT)</option>
+                                        <option value="tls">TLS (MQTTS)</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr id="mqtt_cert_set_row" style="display:none;">
+                                <td><label for="mqtt_cert_set"><b>Cert Set:</b></label></td>
+                                <td>
+                                    <select id="mqtt_cert_set" name="mqtt_cert_set" style="width: 180px;" onchange="submit_enable();">
+                                        <option value="default">default</option>
+                                    </select>
+                                    <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Manage sets under System ’ Certificate Manager.</div>
+                                </td>
+                            </tr>
+                            <tr id="mqtt_skip_cn_row" style="display:none;">
+                                <td><label for="mqtt_skip_cn"><b>Skip CN check:</b></label></td>
+                                <td>
+                                    <select id="mqtt_skip_cn" name="mqtt_skip_cn" style="width: 180px;" onchange="submit_enable();">
+                                        <option value="disable" selected>Disable</option>
+                                        <option value="enable">Enable</option>
+                                    </select>
+                                    <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">When enabled, TLS server certificate common-name/hostname mismatch is ignored.</div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_user"><b>MQTT User:</b></label></td>
+                                <td><input type="text" id="mqtt_user" name="mqtt_user" value="meatpi" /></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_pass"><b>MQTT Pass:</b></label></td>
+                                <td><input type="text" id="mqtt_pass" name="mqtt_pass" value="meatpi" /></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_tx_topic"><b>TX Topic:</b></label></td>
+                                <td><input type="text" id="mqtt_tx_topic" name="mqtt_tx_topic" value="" /></td>
+                                <td><input type="checkbox" id="mqtt_tx_en_checkbox" name="mqtt_tx_en_checkbox" onchange="txCheckBoxChanged()"></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_rx_topic"><b>RX Topic:</b></label></td>
+                                <td><input type="text" id="mqtt_rx_topic" name="mqtt_rx_topic" value="" /></td>
+                                <td><input type="checkbox" id="mqtt_rx_en_checkbox" name="mqtt_rx_en_checkbox" onchange="rxCheckBoxChanged()"></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_status_topic"><b>Status Topic:</b></label></td>
+                                <td><input type="text" id="mqtt_status_topic" name="mqtt_status_topic" value="" /></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_elm327_log"><b>MQTT elm327 log:</b></label></td>
+                                <td>
+                                    <select name="mqtt_elm327_log" style="width: 93px;" id="mqtt_elm327_log" onchange="alert_elm327()">
+                                        <option value="enable">Enable</option>
+                                        <option value="disable">Disable</option>
+                                    </select>
+                                </td>
+                            </tr>
+                        </table>
+                        <div style="overflow-x:auto;">
+                            <div class="section-title" style="margin-top: 1rem;">MQTT CAN Filter</div>
+                            <table id="can_flt_table" >
+                                <tr>
+                                    <th style="text-align: left;">CAN ID (dec)</th>
+                                    <th style="text-align: left;">Name</th>
+                                    <th style="text-align: left;">PID</th>
+                                    <th style="text-align: left;">Index</th>
+                                    <th style="text-align: left;">Start Bit</th>
+                                    <th style="text-align: left;">Bit Length</th>
+                                    <th style="text-align: left;">Expression</th>
+                                    <th style="text-align: left;">Cycle ms</th>
+                                    <th><input id="store_canflt_button" name="store_canflt_button" type="button" onclick="storeCANFLT()" value="Store" style="width: 100%;" /></th>
+                                </tr>
+                                <tr>
+                                    <td style="width: 10%;" ><input type="number" id="canId" min="0" max="536870912" style="width: 80%;"/></td>
+                                    <td style="width: 20%;"><input type="text" id="name" maxlength="16" style="width: 90%;"/></td>
+                                    <td style="width: 10%;"><input type="number" id="pid"  style="width: 80%;"/></td>
+                                    <td style="width: 10%;"><input type="number" id="pindex"  style="width: 80%;"/></td>
+                                    <td style="width: 10%;"><input type="number" id="startBit" min="0" max="63"  style="width: 80%;"/></td>
+                                    <td style="width: 10%;"><input type="number" id="bitLength" min="1" max="64" style="width: 80%;"/></td>
+                                    <td style="width: 20%;"><input type="text" id="expression" maxlength="64"  style="width: 90%;"/></td>
+                                    <td style="width: 10%;"><input type="number" id="cycle" min="100" max="1000"  style="width: 80%;"/></td>
+                                    <td><input id="add_row_button" name="add_row_button" type="button" onclick="addCANFLTRow()" value="Add ID" style="width: 100%;" /></td>
+                                </tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
             </form>
         </div>
+
+	
 
         <div id="automate" class="tabcontent">
             <div class="section-title">Automate</div>
