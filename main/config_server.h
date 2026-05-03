@@ -287,3 +287,7 @@ const char *config_server_get_sta_fallback_dns(int index);
 char *config_server_get_status_json(bool remove_sensitive_info);
 
 char* config_server_get_home_priority_ssid(void);
+
+int config_server_get_use_scheduled_wakeups(void);
+const char* config_server_get_timezone(void);
+const char* config_server_get_scheduled_wakeups(void);

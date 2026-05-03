@@ -2928,8 +2928,10 @@ function getElements() {
         protocol: document.getElementById("protocol"),
         portType: document.getElementById("port_type"),
         mqttElm327Log: document.getElementById("mqtt_elm327_log"),
-        periodicWakeup: document.getElementById("periodic_wakeup"),
+        wakeupMode: document.getElementById("wakeup_mode"),
         wakeupEveryRow: document.getElementById("wakeup_every_row"),
+        scheduledWakeupRow: document.getElementById("scheduled_wakeup_row"),
+        timezone: document.getElementById("timezone"),
         sta_ble_info: document.getElementById("sta_ble_info")
     };
 }
@@ -3196,15 +3198,26 @@ function configurePeriodicWakeup(elements) {
     const sleepDisabled = elements.sleepStatus.value === "disable";
     
     if (sleepDisabled) {
-        elements.periodicWakeup.disabled = true;
-        elements.periodicWakeup.value = "disable";
-        elements.wakeupEveryRow.style.display = "none";
+        if (elements.wakeupMode) {
+            elements.wakeupMode.disabled = true;
+            elements.wakeupMode.value = "disable";
+        }
+        if (elements.wakeupEveryRow) elements.wakeupEveryRow.style.display = "none";
+        if (elements.scheduledWakeupRow) elements.scheduledWakeupRow.style.display = "none";
     } else {
-        elements.periodicWakeup.disabled = false;
-        const wakeupEnabled = elements.periodicWakeup.value === "enable";
-        elements.wakeupEveryRow.style.display = wakeupEnabled ? "table-row" : "none";
+        if (elements.wakeupMode) elements.wakeupMode.disabled = false;
+        
+        const mode = elements.wakeupMode ? elements.wakeupMode.value : "periodic";
+        
+        if (elements.wakeupEveryRow) {
+            elements.wakeupEveryRow.style.display = mode === "periodic" ? "table-row" : "none";
+        }
+        if (elements.scheduledWakeupRow) {
+            elements.scheduledWakeupRow.style.display = mode === "scheduled" ? "table-row" : "none";
+        }
     }
 }
+
 document.getElementById("defaultOpen").click();
 function checkStatus() {
     const xhttp = new XMLHttpRequest();
@@ -3925,7 +3938,11 @@ async function postConfig() {
     obj["ble_power"] = document.getElementById("ble_power").value; // BLE TX power (dBm)
     obj["sleep_status"] = document.getElementById("sleep_status").value;
     obj["sleep_disable_agree"] = document.getElementById("sleep_disable_agree").value;
-    obj["periodic_wakeup"] = document.getElementById("periodic_wakeup").value;
+    // --- CHANGED WAKEUP SAVING LOGIC ---
+    obj["wakeup_mode"] = document.getElementById("wakeup_mode").value;
+    obj["scheduled_times"] = getScheduledTimesString();
+    obj["timezone"] = document.getElementById("timezone").value;
+    // --
     obj["sleep_volt"] = document.getElementById("sleep_volt").value;
     obj["sleep_time"] = document.getElementById("sleep_time").value;
     obj["wakeup_interval"] = document.getElementById("wakeup_interval").value;
@@ -4534,11 +4551,48 @@ async function Load() {
             document.getElementById("sleep_disable_agree").selectedIndex = "0";
         }
         toggleSleepWarning();
-        if(obj.periodic_wakeup == "enable") {
-            document.getElementById("periodic_wakeup").selectedIndex = "0";
-        } else if(obj.periodic_wakeup == "disable") {
-            document.getElementById("periodic_wakeup").selectedIndex = "1";
+
+        // --- CHANGED WAKEUP LOAD LOGIC ---
+        document.getElementById("timezone").value = obj.timezone || "CST6CDT,M3.2.0,M11.1.0";
+        
+        // Handle backwards compatibility
+        if (obj.wakeup_mode) {
+            document.getElementById("wakeup_mode").value = obj.wakeup_mode;
+        } else if (obj.periodic_wakeup === "enable") {
+            document.getElementById("wakeup_mode").value = "periodic";
+        } else {
+            document.getElementById("wakeup_mode").value = "disable";
         }
+
+        // Parse Scheduled Times
+        const container = document.getElementById("scheduled_times_container");
+        if (container) {
+            container.innerHTML = '';
+            let schedStr = obj.scheduled_times || "";
+            if (schedStr) {
+                schedStr.split(',').forEach(t => {
+                    if (t.length === 4) {
+                        let hr24 = parseInt(t.substring(0, 2), 10);
+                        let min = t.substring(2, 4);
+                        let ampm = "AM";
+                        let hr12 = hr24;
+
+                        if (hr24 >= 12) {
+                            ampm = "PM";
+                            if (hr24 > 12) hr12 -= 12;
+                        }
+                        if (hr24 === 0) hr12 = 12;
+
+                        addScheduledTimeRow(hr12.toString(), min, ampm);
+                    }
+                });
+            }
+            // Add a default row if empty
+            if (container.children.length === 0) {
+                addScheduledTimeRow('06', '00', 'AM');
+            }
+        }
+        // ---------------------------------
 
         if ("mqtt_tx_en" in obj) {
             if (obj.mqtt_tx_en === "enable") {
@@ -7796,4 +7850,62 @@ function toggleMqttVisibility() {
         mqttDiv.style.display = "none";
         mqttWarning.style.display = "none";
     }
+}
+
+
+// Build a new row of AM/PM dropdowns
+function addScheduledTimeRow(hr = '12', min = '00', ampm = 'AM') {
+    const container = document.getElementById('scheduled_times_container');
+    const row = document.createElement('div');
+    row.className = 'wakeup-time-row';
+    row.style.cssText = 'display:flex; gap:6px; align-items:center;';
+
+    // Generate 1-12 Hour Options
+    let hrOpts = '';
+    for (let i = 1; i <= 12; i++) {
+        let val = i.toString().padStart(2, '0');
+        let sel = (parseInt(hr) === i) ? 'selected' : '';
+        hrOpts += `<option value="${val}" ${sel}>${val}</option>`;
+    }
+
+    // Generate 0-59 Minute Options
+    let minOpts = '';
+    for (let i = 0; i < 60; i++) {
+        let val = i.toString().padStart(2, '0');
+        let sel = (val === min.padStart(2, '0')) ? 'selected' : '';
+        minOpts += `<option value="${val}" ${sel}>${val}</option>`;
+    }
+
+    let amSel = ampm === 'AM' ? 'selected' : '';
+    let pmSel = ampm === 'PM' ? 'selected' : '';
+
+    row.innerHTML = `
+        <select class="wake-hr" onchange="submit_enable();" style="width:60px; padding:4px;">${hrOpts}</select>
+        <span style="font-weight:bold;">:</span>
+        <select class="wake-min" onchange="submit_enable();" style="width:60px; padding:4px;">${minOpts}</select>
+        <select class="wake-ampm" onchange="submit_enable();" style="width:70px; padding:4px;">
+            <option value="AM" ${amSel}>AM</option>
+            <option value="PM" ${pmSel}>PM</option>
+        </select>
+        <button type="button" class="system-button danger" style="padding:4px 8px;" onclick="this.parentElement.remove(); submit_enable();">X</button>
+    `;
+    container.appendChild(row);
+}
+
+// Convert the UI dropdowns into "0600,1600,2100" for the C-Code
+function getScheduledTimesString() {
+    let militaryTimes = [];
+    document.querySelectorAll('.wakeup-time-row').forEach(row => {
+        let hr = parseInt(row.querySelector('.wake-hr').value, 10);
+        let min = parseInt(row.querySelector('.wake-min').value, 10);
+        let ampm = row.querySelector('.wake-ampm').value;
+
+        if (ampm === "PM" && hr !== 12) hr += 12;
+        if (ampm === "AM" && hr === 12) hr = 0;
+
+        let formattedHour = hr.toString().padStart(2, '0');
+        let formattedMin = min.toString().padStart(2, '0');
+        militaryTimes.push(formattedHour + formattedMin);
+    });
+    return militaryTimes.join(',');
 }

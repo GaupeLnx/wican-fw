@@ -600,6 +600,95 @@ int8_t sleep_mode_init(uint8_t enable, float sleep_volt)
 #include "sdcard.h"
 #include "ble.h"
 
+#include <time.h>
+#include <sys/time.h>
+#include <stdlib.h>
+
+static time_t calculate_next_wake_time_epoch(void)
+{
+    // 1. Apply Timezone
+    const char* tz = config_server_get_timezone();
+    if (tz && strlen(tz) > 0) {
+        setenv("TZ", tz, 1);
+        tzset();
+    } else {
+        setenv("TZ", "UTC0", 1);
+        tzset();
+    }
+
+    // 2. Parse schedule string
+    char sched_str[256];
+    strncpy(sched_str, config_server_get_scheduled_wakeups(), sizeof(sched_str));
+    
+    int target_mins[20];
+    int num_targets = 0;
+    
+    char *token = strtok(sched_str, " ,;");
+    while(token && num_targets < 20) {
+        int mil_time = atoi(token);
+        int hour = mil_time / 100;
+        int min = mil_time % 100;
+        target_mins[num_targets++] = (hour * 60) + min;
+        token = strtok(NULL, " ,;");
+    }
+
+    if (num_targets == 0) {
+        ESP_LOGW("SLEEP", "Invalid schedule, waking in 1 hr");
+        return time(NULL) + 3600;
+    }
+
+    // 3. Sort chronologically
+    for(int i = 0; i < num_targets - 1; i++) {
+        for(int j = i + 1; j < num_targets; j++) {
+            if(target_mins[i] > target_mins[j]) {
+                int temp = target_mins[i];
+                target_mins[i] = target_mins[j];
+                target_mins[j] = temp;
+            }
+        }
+    }
+
+    // 4. Get current local time
+    time_t now;
+    time(&now);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+
+    int current_mins = (timeinfo.tm_hour * 60) + timeinfo.tm_min;
+    int next_target_mins = -1;
+    bool is_tomorrow = false;
+
+    // 5. Find next alarm
+    for (int i = 0; i < num_targets; i++) {
+        if (target_mins[i] > current_mins) {
+            next_target_mins = target_mins[i];
+            break;
+        }
+    }
+
+    if (next_target_mins == -1) {
+        next_target_mins = target_mins[0];
+        is_tomorrow = true;
+    }
+
+    // 6. Create struct tm for target time
+    struct tm target_tm = timeinfo; 
+    target_tm.tm_hour = next_target_mins / 60;
+    target_tm.tm_min = next_target_mins % 60;
+    target_tm.tm_sec = 0;
+    
+    // MKTime automatically handles month/year rollovers if mday exceeds the current month!
+    if (is_tomorrow) {
+        target_tm.tm_mday += 1; 
+    }
+
+    time_t target_epoch = mktime(&target_tm);
+    ESP_LOGI("SLEEP", "Next scheduled wake: %s", ctime(&target_epoch));
+    
+    return target_epoch;
+}
+
+
 #define ADC_UNIT          ADC_UNIT_1
 #define ADC_CONV_MODE     ADC_CONV_SINGLE_UNIT_1
 #define ADC_ATTEN         ADC_ATTEN_DB_6  // 0-3.3V
@@ -852,7 +941,9 @@ void light_sleep_task(void *pvParameters)
 	static int8_t periodic_wakeup;
 	static uint32_t wakeup_interval;
 	static wc_timer_t periodic_wakeup_timer;
-
+        static int use_scheduled_wakeup = 0;
+	static time_t next_scheduled_wake_epoch = 0;
+	
     // Initialize configuration
     sleep_en = config_server_get_sleep_config();
     if(config_server_get_sleep_volt(&sleep_voltage) == -1)
@@ -860,6 +951,8 @@ void light_sleep_task(void *pvParameters)
         sleep_voltage = 13.1f;
     }
 
+    use_scheduled_wakeup = config_server_get_use_scheduled_wakeups();
+    
     // if(config_server_get_wakeup_volt(&wakeup_voltage) == -1) 
 	// {
     //     wakeup_voltage = 13.4f;
@@ -978,8 +1071,10 @@ void light_sleep_task(void *pvParameters)
                         state_info.voltage = battery_voltage;
                         xQueueOverwrite(sleep_state_queue, &state_info);
                         vTaskDelay(pdMS_TO_TICKS(1000));
-                        if(periodic_wakeup)
-                        {
+			
+                        if (use_scheduled_wakeup) {
+                            next_scheduled_wake_epoch = calculate_next_wake_time_epoch();
+                        } else if (periodic_wakeup) {
                             wc_timer_set(&periodic_wakeup_timer, wakeup_interval);
                         }
                     }
@@ -992,13 +1087,26 @@ void light_sleep_task(void *pvParameters)
                         current_state = STATE_WAKE_PENDING;
                         wc_timer_set(&wakeup_timer, 1000); // 2 second timer for stable voltage
                     }
-                    else if(battery_voltage > CRITICAL_VOLTAGE && periodic_wakeup && wc_timer_is_expired(&periodic_wakeup_timer))
+                    else if(battery_voltage > CRITICAL_VOLTAGE)
                     {
-                        ESP_LOGI(TAG, "Periodic wakeup timer expired, returning to normal mode");
-                        // current_state = STATE_NORMAL;
-                        restart_tracker_restart(RESTART_TRACKER_PLANNED_REASON_POWER_WAKE,
-                                                RESTART_TRACKER_SOURCE_SLEEP_MODE,
-                                                RESTART_TRACKER_FLAG_NONE);
+                        bool should_wake = false;
+                        
+                        if (use_scheduled_wakeup) {
+                            time_t now = time(NULL);
+                            if (now >= next_scheduled_wake_epoch) {
+                                ESP_LOGI(TAG, "Scheduled time reached, waking up!");
+                                should_wake = true;
+                            }
+                        } else if (periodic_wakeup && wc_timer_is_expired(&periodic_wakeup_timer)) {
+                            ESP_LOGI(TAG, "Periodic timer expired, waking up!");
+                            should_wake = true;
+                        }
+
+                        if (should_wake) {
+                            restart_tracker_restart(RESTART_TRACKER_PLANNED_REASON_POWER_WAKE,
+                                                    RESTART_TRACKER_SOURCE_SLEEP_MODE,
+                                                    RESTART_TRACKER_FLAG_NONE);
+                        }
                     }
                     break;
 
@@ -1260,6 +1368,7 @@ int32_t sleep_mode_get_time_to_sleep_sec(void)
     }
     return -1; // -1 indicates the timer is not currently running
 }
+
 
 
 

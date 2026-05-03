@@ -1930,12 +1930,21 @@
                     </td>
                 </tr>
                 <tr>
-                    <td>Periodic wake up:</td>
+                    <td>Wakeup Mode:</td>
                     <td>
-                        <select name="periodic_wakeup" id="periodic_wakeup" onchange="submit_enable();">
-                            <option value="enable">Enable</option>
-                            <option value="disable">Disable</option>
+                        <select name="wakeup_mode" id="wakeup_mode" onchange="submit_enable();">
+                            <option value="disable">Disable Wakeups</option>
+                            <option value="periodic">Periodic Interval</option>
+                            <option value="scheduled">Scheduled (Time of Day)</option>
                         </select>
+                    </td>
+                </tr>
+
+                <tr id="scheduled_wakeup_row" style="display: none;">
+                    <td>Scheduled Times:</td>
+                    <td>
+                        <div id="scheduled_times_container" style="display:flex; flex-direction:column; gap:8px; margin-bottom:8px;"></div>
+                        <button type="button" class="system-button" onclick="addScheduledTimeRow('12', '00', 'AM'); submit_enable();">+ Add Wakeup Time</button>
                     </td>
                 </tr>
                 <tr id="wakeup_every_row">
@@ -2110,7 +2119,67 @@
             </div>
         </div>
         <div id="system_tab" class="tabcontent">
-            <div class="section-title">System</div>
+          <div class="section-title">System</div>
+                <tr>
+                    <td>Local Timezone:</td>
+                    <td>
+                        <select id="timezone" name="timezone" onchange="submit_enable();">
+                            <optgroup label="Coordinated Universal Time">
+                                <option value="UTC0">UTC / GMT</option>
+                            </optgroup>
+                            
+                            <optgroup label="North America">
+                                <option value="AST4ADT,M3.2.0,M11.1.0">Atlantic Time (AST/ADT)</option>
+                                <option value="EST5EDT,M3.2.0,M11.1.0">US/Canada Eastern Time (EST/EDT)</option>
+                                <option value="CST6CDT,M3.2.0,M11.1.0" selected>US/Canada Central Time (CST/CDT)</option>
+                                <option value="MST7MDT,M3.2.0,M11.1.0">US/Canada Mountain Time (MST/MDT)</option>
+                                <option value="MST7">US Mountain Time - Arizona (MST - No DST)</option>
+                                <option value="PST8PDT,M3.2.0,M11.1.0">US/Canada Pacific Time (PST/PDT)</option>
+                                <option value="AKST9AKDT,M3.2.0,M11.1.0">US Alaska Time (AKST/AKDT)</option>
+                                <option value="HST10">US Hawaii Time (HST - No DST)</option>
+                            </optgroup>
+
+                            <optgroup label="Europe">
+                                <option value="GMT0BST,M3.5.0/1,M10.5.0">Europe - London/Dublin (GMT/BST)</option>
+                                <option value="CET-1CEST,M3.5.0,M10.5.0/3">Europe - Central (CET/CEST)</option>
+                                <option value="EET-2EEST,M3.5.0/3,M10.5.0/4">Europe - Eastern (EET/EEST)</option>
+                                <option value="MSK-3">Europe - Moscow (MSK - No DST)</option>
+                            </optgroup>
+
+                            <optgroup label="South America">
+                                <option value="ART3">Argentina (ART - No DST)</option>
+                                <option value="BRT3">Brazil - Brasilia (BRT - No DST)</option>
+                                <option value="CLT4CLST,M9.1.0/0,M4.1.0/0">Chile (CLT/CLST)</option>
+                                <option value="COT4">Bolivia/Colombia (BOT/COT - No DST)</option>
+                                <option value="PET5">Peru (PET - No DST)</option>
+                            </optgroup>
+
+                            <optgroup label="Asia & Middle East">
+                                <option value="IST-2">Israel (IST)</option>
+                                <option value="AST-3">Arabia Standard Time (AST)</option>
+                                <option value="GST-4">Gulf Standard Time (GST)</option>
+                                <option value="PKT-5">Pakistan (PKT)</option>
+                                <option value="IST-5:30">India (IST)</option>
+                                <option value="BST-6">Bangladesh (BST)</option>
+                                <option value="ICT-7">Indochina (ICT)</option>
+                                <option value="CST-8">China / Taiwan (CST)</option>
+                                <option value="SGT-8">Singapore (SGT)</option>
+                                <option value="JST-9">Japan (JST)</option>
+                                <option value="KST-9">Korea (KST)</option>
+                            </optgroup>
+
+                            <optgroup label="Australia & Pacific">
+                                <option value="AWST-8">Australia - Western (AWST)</option>
+                                <option value="ACST-9:30ACDT,M10.1.0,M4.1.0/3">Australia - Central (ACST/ACDT)</option>
+                                <option value="AEST-10AEDT,M10.1.0,M4.1.0/3">Australia - Eastern (AEST/AEDT)</option>
+                                <option value="AEST-10">Australia - Brisbane (AEST - No DST)</option>
+                                <option value="NZST-12NZDT,M9.5.0,M4.1.0/3">New Zealand (NZST/NZDT)</option>
+                            </optgroup>
+                        </select>
+                        <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Required to accurately trigger Scheduled Wakeups.</div>
+                    </td>
+                </tr>
+            <div class="divider"></div>
             <table class="form-table">
                 <tr>
                     <td>Reboot WiCAN:</td>

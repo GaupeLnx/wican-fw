@@ -243,6 +243,12 @@ const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\",\"we
 static device_config_t device_config;
 TimerHandle_t xrestartTimer;
 
+// --- NEW WAKEUP SETTINGS ---
+static char wakeup_mode_val[16] = "periodic";
+static char scheduled_times_val[256] = "0600";
+static char timezone_val[64] = "CST6CDT,M3.2.0,M11.1.0";
+// ---------------------------
+
 static void config_server_schedule_reboot(restart_tracker_planned_reason_t reason,
 								  restart_tracker_source_t source,
 								  uint32_t flags)
@@ -1851,6 +1857,11 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "periodic_wakeup", device_config.periodic_wakeup);
 	cJSON_AddStringToObject(root, "wakeup_interval", device_config.wakeup_interval);
 
+        // --- NEW WAKEUP SETTINGS ---
+	cJSON_AddStringToObject(root, "wakeup_mode", wakeup_mode_val);
+	cJSON_AddStringToObject(root, "scheduled_times", scheduled_times_val);
+	cJSON_AddStringToObject(root, "timezone", timezone_val);	
+
 	cJSON_AddStringToObject(root, "batt_alert", device_config.batt_alert);
 	if(!remove_sensitive_info)
 	{
@@ -3426,6 +3437,23 @@ static void config_server_load_cfg(char *cfg)
 	ESP_LOGI(TAG, "device_config.wakeup_interval: %s", device_config.wakeup_interval);
 	//*****	
 
+        // --- NEW WAKEUP SETTINGS ---
+	key = cJSON_GetObjectItem(root, "wakeup_mode");
+	if (key && key->valuestring) {
+		strlcpy(wakeup_mode_val, key->valuestring, sizeof(wakeup_mode_val));
+	}
+
+	key = cJSON_GetObjectItem(root, "scheduled_times");
+	if (key && key->valuestring) {
+		strlcpy(scheduled_times_val, key->valuestring, sizeof(scheduled_times_val));
+	}
+
+	key = cJSON_GetObjectItem(root, "timezone");
+	if (key && key->valuestring) {
+		strlcpy(timezone_val, key->valuestring, sizeof(timezone_val));
+	}
+	// ---------------------------
+	
 
 	//*****
 	// sleep_disable_agree
@@ -3957,7 +3985,8 @@ int8_t config_server_get_sleep_time(uint32_t *sleep_time)
 
 int8_t config_server_get_periodic_wakeup(void)
 {
-	if(strcmp(device_config.periodic_wakeup, "enable") == 0)
+	// Now checks our new dropdown variable instead of the legacy toggle
+	if(strcmp(wakeup_mode_val, "periodic") == 0)
 	{
 		return 1;
 	}
@@ -4406,5 +4435,22 @@ const char *config_server_get_sta_fallback_gateway(int index) {
 const char *config_server_get_sta_fallback_dns(int index) {
     if (index < 0 || index >= device_config.sta_fallbacks_count) return "";
     return device_config.sta_fallbacks[index].dns;
+}
+
+
+// --- NEW WAKEUP GETTERS ---
+int config_server_get_use_scheduled_wakeups(void) {
+    if(strcmp(wakeup_mode_val, "scheduled") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+const char* config_server_get_timezone(void) {
+    return timezone_val;
+}
+
+const char* config_server_get_scheduled_wakeups(void) {
+    return scheduled_times_val;
 }
 
