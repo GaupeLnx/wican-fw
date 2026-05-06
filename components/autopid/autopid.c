@@ -3180,16 +3180,17 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                 xEventGroupSetBits(xautopid_event_group, ECU_CONNECTED_BIT);
                 autopid_config->last_successful_pid_time = time(NULL);
 
-                // ---> SEMANTIC GARBAGE COLLECTOR <---
+		// ---> SEMANTIC GARBAGE COLLECTOR <---
                 uint32_t valid_start = 0;
                 bool found_valid = false;
                 
                 // Scan the buffer byte-by-byte to find the true start of the OBD2 response
                 for (uint32_t i = 0; i < elm327_response.length; i++) {
-                    // Check for an ISO-TP First Frame (0x10) followed by a valid Service ID (0x62, 0x41, 0x49, 0x54)
+                    // Check for an ISO-TP First Frame (0x10) followed by a valid Service ID
                     if (elm327_response.data[i] == 0x10 && (i + 2 < elm327_response.length)) {
                         uint8_t sid = elm327_response.data[i+2];
-                        if (sid == 0x62 || sid == 0x41 || sid == 0x49 || sid == 0x54) {
+                        if (sid == 0x62 || sid == 0x41 || sid == 0x49 || sid == 0x54 || 
+                            sid == 0x43 || sid == 0x47 || sid == 0x4A) {
                             valid_start = i;
                             found_valid = true;
                             break;
@@ -3198,7 +3199,8 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                     // Check for a Single Frame (0x01 to 0x07) followed by a valid Service ID
                     else if (elm327_response.data[i] > 0x00 && elm327_response.data[i] < 0x08 && (i + 1 < elm327_response.length)) {
                         uint8_t sid = elm327_response.data[i+1];
-                        if (sid == 0x62 || sid == 0x41 || sid == 0x49 || sid == 0x54) {
+                        if (sid == 0x62 || sid == 0x41 || sid == 0x49 || sid == 0x54 || 
+                            sid == 0x43 || sid == 0x47 || sid == 0x4A) {
                             valid_start = i;
                             found_valid = true;
                             break;
@@ -3220,7 +3222,6 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                     strcpy((char *)elm327_response.data, "error");
                 }
                 // -----------------------------------------
-
 		
                 // ---> LOOP THROUGH PARAMETERS USING THE SHARED RESPONSE <---
                 for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
