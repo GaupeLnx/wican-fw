@@ -291,3 +291,4 @@ char* config_server_get_home_priority_ssid(void);
 int config_server_get_use_scheduled_wakeups(void);
 const char* config_server_get_timezone(void);
 const char* config_server_get_scheduled_wakeups(void);
+int8_t config_server_get_mqtt_include_timestamp(void);

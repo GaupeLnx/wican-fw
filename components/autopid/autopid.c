@@ -989,8 +989,11 @@ void autopid_data_publish(void)
 
             if (root->child)
             {
-                cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
+                if (config_server_get_mqtt_include_timestamp() == 1) {
+                    cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
+                }
                 char *json_str = cJSON_PrintUnformatted(root);
+		
                 if (json_str)
                 {
                     if (autopid_config->group_destination && strlen(autopid_config->group_destination) > 0)
@@ -1262,7 +1265,9 @@ void autopid_publish_all_destinations(void)
         return;
     }
 
-    // Inject timestamp into snapshot JSON
+
+    // Inject timestamp into snapshot JSON (only if enabled!)
+    if (config_server_get_mqtt_include_timestamp() == 1)
     {
         cJSON *ts_root = cJSON_Parse(raw_json);
         if (ts_root)
@@ -3390,8 +3395,15 @@ static void publish_parameter_mqtt(parameter_t *param)
                 
                 limitJsonDecimalPrecision(param_json);
                 
+               limitJsonDecimalPrecision(param_json);
+                
                 // Add the timestamp BEFORE we print and delete
-                cJSON_AddNumberToObject(param_json, "timestamp", (double)time(NULL));
+                if (config_server_get_mqtt_include_timestamp() == 1) {
+                    cJSON_AddNumberToObject(param_json, "timestamp", (double)time(NULL));
+                }
+                
+                // Print to payload
+                payload = cJSON_PrintUnformatted(param_json);
                 
                 // Print to payload
                 payload = cJSON_PrintUnformatted(param_json);

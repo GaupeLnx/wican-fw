@@ -249,6 +249,10 @@ static char scheduled_times_val[256] = "0600";
 static char timezone_val[64] = "CST6CDT,M3.2.0,M11.1.0";
 // ---------------------------
 
+// --- NEW MQTT TIMESTAMP SETTING ---
+static char mqtt_include_timestamp_val[16] = "enable";
+// ----------------------------------
+
 static void config_server_schedule_reboot(restart_tracker_planned_reason_t reason,
 								  restart_tracker_source_t source,
 								  uint32_t flags)
@@ -1943,6 +1947,15 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "mqtt_tx_topic", device_config.mqtt_tx_topic);
 	cJSON_AddStringToObject(root, "mqtt_rx_topic", device_config.mqtt_rx_topic);
 	cJSON_AddStringToObject(root, "mqtt_status_topic", device_config.mqtt_status_topic);
+
+	cJSON_AddStringToObject(root, "mqtt_tx_topic", device_config.mqtt_tx_topic);
+	cJSON_AddStringToObject(root, "mqtt_rx_topic", device_config.mqtt_rx_topic);
+	cJSON_AddStringToObject(root, "mqtt_status_topic", device_config.mqtt_status_topic);
+	
+	// --- NEW MQTT TIMESTAMP SETTING ---
+	cJSON_AddStringToObject(root, "mqtt_include_timestamp", mqtt_include_timestamp_val);
+	// ----------------------------------
+	
 	cJSON_AddStringToObject(root, "device_id", device_id);
 	cJSON_AddStringToObject(root, "subnet_overlap", dev_status_is_bit_set(DEV_STA_AP_OVERLAP_BIT) ? "yes" : "no");
 
@@ -3095,6 +3108,17 @@ static void config_server_load_cfg(char *cfg)
 	ESP_LOGI(TAG, "device_config.mqtt_status_topic: %s", device_config.mqtt_status_topic);
 	//*****
 
+
+	// --- NEW MQTT TIMESTAMP SETTING ---
+	key = cJSON_GetObjectItem(root, "mqtt_include_timestamp");
+	if (key && key->valuestring) {
+		strlcpy(mqtt_include_timestamp_val, key->valuestring, sizeof(mqtt_include_timestamp_val));
+	} else {
+		strlcpy(mqtt_include_timestamp_val, "enable", sizeof(mqtt_include_timestamp_val)); // Default
+	}
+	ESP_LOGI(TAG, "mqtt_include_timestamp: %s", mqtt_include_timestamp_val);
+	// ----------------------------------
+	
 	//*****
 	key = cJSON_GetObjectItem(root,"wakeup_volt");
 	if(key == 0)
@@ -4452,5 +4476,13 @@ const char* config_server_get_timezone(void) {
 
 const char* config_server_get_scheduled_wakeups(void) {
     return scheduled_times_val;
+}
+
+// --- NEW MQTT TIMESTAMP GETTER ---
+int8_t config_server_get_mqtt_include_timestamp(void) {
+    if(strcmp(mqtt_include_timestamp_val, "enable") == 0) {
+        return 1;
+    }
+    return 0;
 }
 

@@ -46,7 +46,7 @@
                     // UPDATED: Point the fallback URL to your repository
                     const url = proRelease.html_url || 'https://github.com/wambs/wican-fw/releases';
                     const versionText = ` <span style='color:#b45309'>(v${latestVersion})</span>`;
-                    notice.innerHTML = `<span style=\"font-weight: 600;\">New Forked BETA firmware!</span><br><a id=\"firmware-update-link\" href=\"${url}\" target=\"_blank\" style=\"color: #2563eb; text-decoration: underline;\">Download</a>${versionText}`;
+                    notice.innerHTML = `<span style=\"font-weight: 600;\">New Forked Groups firmware!</span><br><a id=\"firmware-update-link\" href=\"${url}\" target=\"_blank\" style=\"color: #2563eb; text-decoration: underline;\">Download</a>${versionText}`;
                     notice.style.display = 'block';
                 }
             }
@@ -3989,6 +3989,7 @@ async function postConfig() {
         obj["mqtt_rx_en"] = "disable";
     }
     obj["mqtt_status_topic"] = document.getElementById("mqtt_status_topic").value;
+    obj["mqtt_include_timestamp"] = document.getElementById("mqtt_include_timestamp").checked ? "enable" : "disable";
     obj["mqtt_elm327_log"] = document.getElementById("mqtt_elm327_log").value;
     obj["logger_status"] = document.getElementById("logger_status").value;
     obj["log_filesystem"] = document.getElementById("log_filesystem").value;
@@ -4683,6 +4684,13 @@ async function Load() {
         document.getElementById("mqtt_tx_topic").value = obj.mqtt_tx_topic;
         document.getElementById("mqtt_rx_topic").value = obj.mqtt_rx_topic;
         document.getElementById("mqtt_status_topic").value = obj.mqtt_status_topic;
+
+        if ("mqtt_include_timestamp" in obj) {
+           document.getElementById("mqtt_include_timestamp").checked = (obj.mqtt_include_timestamp === "enable");
+        } else {
+           document.getElementById("mqtt_include_timestamp").checked = true; // Default to true
+        }
+
         document.getElementById("mqtt_elm327_log").value = obj.mqtt_elm327_log;
         document.getElementById("vpn_status").innerHTML = obj.vpn_status || "N/A";
         // Optional fields for MQTTS (UI only for now)
@@ -7023,7 +7031,7 @@ function renderVehicleGroups(groupsData) {
                         const nameInput = document.createElement('input');
                         nameInput.value = param.name || '';
                         nameInput.placeholder = "Field Name";
-                        nameInput.style.cssText = "font-weight:600; width:220px; border:1px solid transparent; background:transparent; border-bottom:1px solid #cbd5e1;";
+                        nameInput.style.cssText = "font-weight:600; width:300px; border:1px solid transparent; background:transparent; border-bottom:1px solid #cbd5e1;";
                         nameInput.onchange = (e) => { param.name = e.target.value; };
                         topRow.appendChild(nameInput);
 
@@ -7109,7 +7117,7 @@ function renderVehicleGroups(groupsData) {
                             const inp = document.createElement('input');
                             inp.value = (val != null) ? val : '';
                             inp.placeholder = ph;
-                            inp.style.width = "175%";
+                            inp.style.width = "225%";
                             inp.style.border = "1px solid #e2e8f0";
                             inp.style.padding = "3px";
                             inp.onchange = (e) => { param[key] = e.target.value; };

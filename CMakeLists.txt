@@ -38,6 +38,12 @@ execute_process(
 )
 
 set(GIT_SHA1 "${GIT_SHA}")
+
+# ---> ADD THIS OVERRIDE BLOCK <---
+if(DEFINED CUSTOM_BIN_NAME)
+    set(GIT_SHA1 "${CUSTOM_BIN_NAME}")
+endif()
+
 string(REPLACE "." "" GIT_SHA "${GIT_SHA}")
 
 add_definitions(-DGIT_SHA="${GIT_SHA1}")
@@ -50,7 +56,7 @@ set(HARDWARE_VER ${WICAN_PRO})
 
 add_definitions(-DHARDWARE_VER=${HARDWARE_VER})
 
-set(PROJECT_PREF "wican-fw")
+set(PROJECT_PREF "Wican")
 
 # Set HW_PREF based on HARDWARE_VER
 if (HARDWARE_VER EQUAL ${WICAN_PRO})
@@ -69,6 +75,11 @@ endif()
 
 add_definitions(-DHARDWARE_VERSION="${HW_VER}")
 
-# Form the project binary name
-set(PRJ_BIN "${PROJECT_PREF}_${HW_PREF}_${GIT_SHA}")
+# Form the project binary name (allow command-line override)
+if(DEFINED CUSTOM_BIN_NAME)
+    set(PRJ_BIN "${CUSTOM_BIN_NAME}")
+else()
+    set(PRJ_BIN "${PROJECT_PREF}_${HW_PREF}_${GIT_SHA}")
+endif()
+
 project("${PRJ_BIN}")

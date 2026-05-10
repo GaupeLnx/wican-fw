@@ -1450,6 +1450,14 @@
                                 <td><label for="mqtt_status_topic"><b>Status Topic:</b></label></td>
                                 <td><input type="text" id="mqtt_status_topic" name="mqtt_status_topic" value="" /></td>
                             </tr>
+			    <tr>
+                                <td><label for="mqtt_include_timestamp"><b>Include
+                                Timestamp In Payload:</b></label></td>
+                                <td>
+                                    <input type="checkbox" id="mqtt_include_timestamp" name="mqtt_include_timestamp" onchange="submit_enable()" checked>
+                                    <div style="font-size:0.75rem; color:#6b7280; display:inline-block;">Appends Epoch time to payload.</div>
+                                </td>
+                            </tr>
                             <tr>
                                 <td><label for="mqtt_elm327_log"><b>MQTT elm327 log:</b></label></td>
                                 <td>

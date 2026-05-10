@@ -22,5 +22,6 @@
 #ifndef __VER_H__
 #define __VER_H__
 
+// #define GIT_SHA "WICAN-Pro_v4.49-Gui-Beta-17"
 
 #endif
