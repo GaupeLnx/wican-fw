@@ -2010,7 +2010,7 @@ content.style.cssText='padding:8px 10px;'+(isCollapsed?'display:none;':'display:
                 <option value="ABRP_API" ${d.type==='ABRP_API'?'selected':''}>ABRP API</option>
             </select>
         </td></tr>
-        <tr><td style="width:110px;">Cycle (ms):</td><td><input type="number" class="dest-cycle" value="${d.cycle}" min="0" style="width:180px; box-sizing:border-box;"/></td></tr>
+        <tr class="row-cycle"><td style="width:110px;">Cycle (ms):</td><td><input type="number" class="dest-cycle" value="${d.cycle}" min="0" style="width:180px; box-sizing:border-box;"/></td></tr>
         <tr><td>Destination:</td><td><input type="text" class="dest-url" value="${(d.destination||'').replace(/"/g,'&quot;')}" placeholder="URL / topic" maxlength="1024" style="width:100%; box-sizing:border-box;"/></td></tr>
         <tr class="row-api-token" ${d.type==='ABRP_API'?'':'style="display:none;"'}><td>API Token:</td><td><input type="text" class="dest-api-token" value="${(d.api_token||'').replace(/"/g,'&quot;')}" placeholder="ABRP token" maxlength="512" style="width:100%; box-sizing:border-box;"/></td></tr>
         <tr class="row-abrp-api-key" ${d.type==='ABRP_API'?'':'style="display:none;"'}><td>API Key:</td><td><input type="text" class="dest-abrp-api-key" value="${(d.auth?.api_key||'').replace(/"/g,'&quot;')}" placeholder="ABRP api_key" maxlength="512" style="width:100%; box-sizing:border-box;"/></td></tr>
@@ -2177,7 +2177,9 @@ content.style.cssText='padding:8px 10px;'+(isCollapsed?'display:none;':'display:
         d.cert_set = certSel.value || 'default';
     });
 });
-document.getElementById('add_destination_btn').disabled = window.automateDestinations.length>=6;
+    document.getElementById('add_destination_btn').disabled = window.automateDestinations.length>=6;
+
+    toggleDestinationCycleVisibility();
 }
 
 async function refreshDestinationStats(){
@@ -2494,6 +2496,7 @@ async function storeAutoTableData() {
                     const gInit = document.getElementById(`g_${gIndex}_init`);
                     const gPeriod = document.getElementById(`g_${gIndex}_period`);
 		    const gEn = document.getElementById(`g_${gIndex}_en_group`);
+		    const gMqtt = document.getElementById(`g_${gIndex}_mqtt_topic`);
 
                     if (gName) group.group_name = gName.value;
                     if (gCond) group.condition = gCond.value;
@@ -6201,6 +6204,7 @@ function syncGroupsFromUIToMemory() {
         const gInit = document.getElementById(`g_${gIndex}_init`);
         const gPeriod = document.getElementById(`g_${gIndex}_period`);
 	const gEn = document.getElementById(`g_${gIndex}_en_group`);
+	const gMqtt = document.getElementById(`g_${gIndex}_mqtt_topic`);
 
         if (gName) group.group_name = gName.value;
         if (gCond) group.condition = gCond.value;
@@ -6680,15 +6684,13 @@ function renderVehicleGroups(groupsData) {
         const currentBg = blueShades[gIndex % 4];
 
         const groupDiv = document.createElement('div');
-        groupDiv.className = 'group-container group-draggable';
-        groupDiv.draggable = true; // Enable Group Dragging
-        //groupDiv.style.cssText = "border:1px solid #cbd5e1; margin-bottom:15px; padding:10px; border-radius:6px; background:${currentBg};";
-	groupDiv.style.cssText = `border:1px solid #94a3b8; margin-bottom:15px; padding:10px; border-radius:6px; background:${currentBg};`;
+        groupDiv.className = 'group-container'; 
+        groupDiv.draggable = false; // Initially false, toggled on header click
+        groupDiv.style.cssText = `border:1px solid #94a3b8; margin-bottom:15px; padding:10px; border-radius:6px; background:${currentBg};`;
         
         // --- GROUP DRAG AND DROP HANDLERS ---
         groupDiv.addEventListener('dragstart', (e) => {
-            // Only trigger if the group container itself is being dragged, not a PID inside it
-            if (e.target.classList.contains('group-container')) {
+            if (e.target === groupDiv) {
                 dragSrcEl = groupDiv;
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('dragType', 'group');
@@ -6697,7 +6699,10 @@ function renderVehicleGroups(groupsData) {
             }
         });
 
-        groupDiv.addEventListener('dragend', () => groupDiv.classList.remove('group-dragging'));
+        groupDiv.addEventListener('dragend', () => {
+            groupDiv.classList.remove('group-dragging');
+            groupDiv.draggable = false;
+        });
         groupDiv.addEventListener('dragover', (e) => { e.preventDefault(); return false; });
 
         groupDiv.addEventListener('drop', (e) => {
@@ -6723,10 +6728,24 @@ function renderVehicleGroups(groupsData) {
 
         // Header Row 1: Name, Period, Condition, Buttons
         const headerRow1 = document.createElement('div');
-        headerRow1.style.cssText = "display:flex; justify-content:space-between; align-items:center; width:100%;";
+        headerRow1.style.cssText = "display:flex; justify-content:space-between; align-items:center; width:100%; cursor:grab;";
+        
+        // Only allow dragging when clicking the header row (but not its inputs)
+        headerRow1.addEventListener('mousedown', (e) => {
+            if (['INPUT', 'BUTTON', 'SELECT', 'OPTION'].includes(e.target.tagName)) return;
+            groupDiv.draggable = true;
+        });
+        headerRow1.addEventListener('mouseup', () => { groupDiv.draggable = false; });
+        headerRow1.addEventListener('mouseleave', () => { groupDiv.draggable = false; });
 
         const r1Left = document.createElement('div');
         r1Left.style.cssText = "display:flex; align-items:center; gap:10px; flex:1;";
+        
+        // Group Drag Handle Icon
+        const gDragHandle = document.createElement('span');
+        gDragHandle.innerHTML = '&#9776;';
+        gDragHandle.style.cssText = "color:#94a3b8; font-size:1.1rem; margin-right:5px;";
+        r1Left.appendChild(gDragHandle);
 
         // Expand Arrow
         const gArrow = document.createElement('span');
@@ -6812,10 +6831,15 @@ function renderVehicleGroups(groupsData) {
         gDelBtn.className = 'system-button danger';
         gDelBtn.onclick = (e) => { e.stopPropagation(); deleteGroup(gIndex); };
 
-        r1Right.appendChild(gPlayBtn);
+       r1Right.appendChild(gPlayBtn);
         r1Right.appendChild(gDelBtn);
         headerRow1.appendChild(r1Right);
+        groupHeader.appendChild(headerRow1); // Append Row 1 first
 
+	
+
+
+	
         // Header Row 2
         const headerRow2 = document.createElement('div');
         headerRow2.style.cssText = "display:flex; align-items:center; gap:15px; padding-left:25px; width:100%;";
@@ -6847,7 +6871,39 @@ function renderVehicleGroups(groupsData) {
         groupHeader.appendChild(headerRow2);
         groupDiv.appendChild(groupHeader);
 	
+        // ---> [NEW] Group MQTT Topic Row <---
+        // Check if any parameter in this group uses "MQTT_Grp"
+        let hasMqttGrp = false;
+        if (group.pids) {
+            hasMqttGrp = group.pids.some(p => p.parameters && p.parameters.some(pm => (pm.destination_type || pm.type || "Default") === 'MQTT_Grp'));
+        }
 
+        const headerMqttRow = document.createElement('div');
+        headerMqttRow.id = `g_${gIndex}_mqtt_topic_row`;
+        // Hide row if no PIDs use it
+        headerMqttRow.style.cssText = `display:${hasMqttGrp ? 'flex' : 'none'}; align-items:center; gap:10px; padding-left:25px; width:100%; margin-top:8px; margin-bottom:4px;`;
+       
+        const gMqttLabel = document.createElement('span');
+        gMqttLabel.style.cssText = "font-size:0.85rem; color:#64748b; font-weight:500;";
+        gMqttLabel.innerText = "Group MQTT Topic:";
+        headerMqttRow.appendChild(gMqttLabel);
+
+	
+
+        const gMqttInput = document.createElement('input');
+        gMqttInput.id = `g_${gIndex}_mqtt_topic`;
+        gMqttInput.value = group.mqtt_topic || '';
+        gMqttInput.placeholder = "e.g. vehicle/group1/data";
+        gMqttInput.maxLength = 75; // Handled to 75 chars
+        gMqttInput.style.cssText = "width:350px; padding:3px; border:1px solid #cbd5e1; border-radius:3px; font-size:0.85rem; background:rgba(255,255,255,0.8); color:#334155;";
+        gMqttInput.onchange = (e) => { group.mqtt_topic = e.target.value; enableAutoStoreButton(); };
+        gMqttInput.onclick = (e) => e.stopPropagation();
+        
+        headerMqttRow.appendChild(gMqttInput);
+        groupHeader.appendChild(headerMqttRow); 
+        // ------------------------------------
+
+	
         // Test Console Div (Hidden by default)
         const termDiv = document.createElement('div');
         termDiv.id = `term_g_${gIndex}`;
@@ -6892,8 +6948,8 @@ function renderVehicleGroups(groupsData) {
                     const isPidOpen = (pid._collapsed === false); 
                     const pidCard = document.createElement('div');
                     
-                    // Restore Drag and Drop
-                    pidCard.draggable = true;
+                    // Restore Drag and Drop (Only active when clicking header)
+                    pidCard.draggable = false;
                     pidCard.style.cssText = "background:white; border:1px solid #e2e8f0; border-radius:4px; margin-bottom:10px;";
                     
                     pidCard.addEventListener('dragstart', (e) => {
@@ -6904,7 +6960,10 @@ function renderVehicleGroups(groupsData) {
                         pidCard.dataset.pIndex = pIndex;
                         pidCard.style.opacity = '0.4';
                     });
-                    pidCard.addEventListener('dragend', (e) => { pidCard.style.opacity = '1'; });
+                    pidCard.addEventListener('dragend', (e) => { 
+                        pidCard.style.opacity = '1'; 
+                        pidCard.draggable = false;
+                    });
                     pidCard.addEventListener('dragover', (e) => { e.preventDefault(); return false; });
                     pidCard.addEventListener('drop', (e) => {
                         e.preventDefault();
@@ -6932,12 +6991,20 @@ function renderVehicleGroups(groupsData) {
 
                     // PID Header
                     const pidHeader = document.createElement('div');
-                    pidHeader.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#f1f5f9; padding:8px 12px; border-bottom:1px solid #e2e8f0; cursor:pointer;";
+                    pidHeader.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#f1f5f9; padding:8px 12px; border-bottom:1px solid #e2e8f0; cursor:grab;";
                     pidHeader.onclick = (e) => {
                         if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
                         pid._collapsed = !pid._collapsed;
                         renderVehicleGroups();
                     };
+                    
+                    // Only allow dragging when clicking the PID header (but not its inputs)
+                    pidHeader.addEventListener('mousedown', (e) => {
+                        if (['INPUT', 'BUTTON', 'SELECT', 'OPTION', 'LABEL'].includes(e.target.tagName)) return;
+                        pidCard.draggable = true;
+                    });
+                    pidHeader.addEventListener('mouseup', () => { pidCard.draggable = false; });
+                    pidHeader.addEventListener('mouseleave', () => { pidCard.draggable = false; });
 
                     // PID Header Left (Arrow, Drag, PID Input)
                     const pidHeaderLeft = document.createElement('div');
@@ -7100,16 +7167,30 @@ function renderVehicleGroups(groupsData) {
                         // Destination Dropdown
                         const destSelect = document.createElement('select');
                         destSelect.style.cssText = "width:100%; padding:2px; border:1px solid #e2e8f0;";
-                        ["Default", "MQTT_Topic", "MQTT_WallBox"].forEach(val => {
+                        
+                        // ---> [NEW] Added MQTT_Grp to the array <---
+                        ["Default", "MQTT_Topic", "MQTT_Grp", "MQTT_WallBox"].forEach(val => {
                             const opt = document.createElement('option');
                             opt.value = val;
                             opt.text = val;
-                            // FIX: Check destination_type OR legacy 'type'
                             const current = (param.destination_type || param.type || "Default").toLowerCase();
                             if (current === val.toLowerCase()) opt.selected = true;
                             destSelect.appendChild(opt);
                         });
-                        destSelect.onchange = (e) => { param.destination_type = e.target.value; };
+                        
+                        destSelect.onchange = (e) => { 
+                            param.destination_type = e.target.value; 
+                            
+                            // ---> [NEW] Dynamic Visibility Toggle <---
+                            const mqttRow = document.getElementById(`g_${gIndex}_mqtt_topic_row`);
+                            if (mqttRow) {
+                                // Check if ANY parameter in the whole group is currently set to MQTT_Grp
+                                const showGrpMqtt = group.pids.some(p => p.parameters && p.parameters.some(pm => (pm.destination_type || pm.type || "Default") === 'MQTT_Grp'));
+                                mqttRow.style.display = showGrpMqtt ? 'flex' : 'none';
+                            }
+                            
+                            enableAutoStoreButton(); 
+                        };
                         detailsDiv.appendChild(destSelect);
 
 
@@ -7158,6 +7239,8 @@ function renderVehicleGroups(groupsData) {
     addGroupBtn.style.cssText = "display:block; width:100%; margin-top:20px; padding:15px; border:2px dashed #94a3b8; background-color:#f8fafc; color:#475569; font-weight:bold; cursor:pointer; font-size:1rem; border-radius:6px;";
     addGroupBtn.onclick = () => addGroup();
     container.appendChild(addGroupBtn);
+
+    toggleDestinationCycleVisibility();
 }
 
 
@@ -7192,6 +7275,7 @@ function addGroup() {
 
     latest_car_models.pid_groups.push({
         group_name: "New Group",
+	mqtt_topic: "",
 	enabled: true,
         condition: "always",
         period: 1000,
@@ -7916,4 +8000,13 @@ function getScheduledTimesString() {
         militaryTimes.push(formattedHour + formattedMin);
     });
     return militaryTimes.join(',');
+}
+
+function toggleDestinationCycleVisibility() {
+    // Restored: Always show the cycle row so the user can choose between 
+    // buffering (e.g. 5000ms) or event-driven (0ms)
+    const cycleRows = document.querySelectorAll('.row-cycle');
+    cycleRows.forEach(row => {
+        row.style.display = 'table-row';
+    });
 }

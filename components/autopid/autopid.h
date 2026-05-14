@@ -63,6 +63,7 @@ typedef enum
     DEST_HTTP,
     DEST_HTTPS,
     DEST_ABRP_API,
+    DEST_MQTT_GRP,
     DEST_MAX
 } destination_type_t;
 
@@ -116,6 +117,7 @@ typedef enum {
 // [NEW] Group Structure (References Master List)
 typedef struct {
     char *name;
+    char *mqtt_topic;           // <--- [NEW] Group-specific MQTT topic
     bool enabled;
     char *init;                 
     detection_method_t detection_method; 
@@ -263,7 +265,7 @@ esp_err_t autopid_find_standard_pid(uint8_t protocol, char *available_pids, uint
 esp_err_t autopid_set_protocol_number(int32_t protocol_value);
 esp_err_t autopid_get_protocol_number(int32_t *protocol_value);
 char *autopid_get_value_by_name(char* name);
-void autopid_publish_all_destinations(void);
+void autopid_publish_all_destinations(bool is_event_trigger);
 void autopid_app_reset_timer(void);
 void autopid_set_group_mqtt_state(const char* group_name, bool active_state, uint32_t timeout_mins);
 // Process a raw ELM327 response array (DTCs or ISO-TP) into a dynamic hex string.

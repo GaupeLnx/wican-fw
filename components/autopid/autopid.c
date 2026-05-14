@@ -94,6 +94,8 @@ static char *autopid_config_json = NULL;
 static StaticTimer_t autopid_bit_set_timer_buffer;
 static TimerHandle_t autopid_bit_set_timer_handle = NULL;
 
+static const char* current_group_mqtt_topic = NULL;
+
 #if HARDWARE_VER == WICAN_PRO
 static char *elm327_autopid_cmd_buffer;
 static uint32_t elm327_autopid_cmd_buffer_len = 0;
@@ -713,9 +715,13 @@ static void autopid_data_update(autopid_config_t *pids)
                     for (uint32_t i = 0; i < grp->pid_count; i++) {
                         pid_data_t *curr_pid = grp->pids[i];
                         if (!curr_pid || !curr_pid->enabled) continue;
+			
                         for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
                             parameter_t *param = &curr_pid->parameters[j];
                             if (!param->enabled) continue;
+
+                            // ---> SKIP NON-DEFAULT DESTINATIONS <---
+                            if (param->destination_type != DEST_DEFAULT) continue;
 
                             if (param->name) {
                                 if (param->raw_string_value != NULL) {
@@ -759,6 +765,9 @@ static void autopid_data_update(autopid_config_t *pids)
                         parameter_t *param = &curr_pid->parameters[j];
                         if (!param->enabled) continue;
 
+                        // ---> SKIP NON-DEFAULT DESTINATIONS <---
+                        if (param->destination_type != DEST_DEFAULT) continue;
+
                         if (param->name) {
                             if (param->raw_string_value != NULL) {
                                 cJSON_AddStringToObject(root, param->name, param->raw_string_value);
@@ -782,6 +791,9 @@ static void autopid_data_update(autopid_config_t *pids)
                 {
                     parameter_t *param = &f->parameters[pi];
                     if (!param->enabled) continue;
+
+                    // ---> SKIP NON-DEFAULT DESTINATIONS <---
+                    if (param->destination_type != DEST_DEFAULT) continue;
 
                     if (param->name) {
                         if (param->raw_string_value != NULL) {
@@ -908,6 +920,9 @@ void autopid_data_publish(void)
                             parameter_t *param = &curr_pid->parameters[j];
                             if (!param->enabled) continue;
 
+                            // ---> SKIP NON-DEFAULT DESTINATIONS <---
+                            if (param->destination_type != DEST_DEFAULT) continue;
+
                             if (param->name) {
                                 if (param->raw_string_value != NULL) {
                                     cJSON_AddStringToObject(root, param->name, param->raw_string_value);
@@ -948,6 +963,10 @@ void autopid_data_publish(void)
                     for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
                         parameter_t *param = &curr_pid->parameters[j];
                         if (!param->enabled) continue;
+
+                        // ---> SKIP NON-DEFAULT DESTINATIONS <---
+                        if (param->destination_type != DEST_DEFAULT) continue;
+
                           if (param->name) {
                             if (param->raw_string_value != NULL) {
                                 cJSON_AddStringToObject(root, param->name, param->raw_string_value);
@@ -972,6 +991,9 @@ void autopid_data_publish(void)
                     parameter_t *param = &f->parameters[pi];
 
                     if (!param->enabled) continue;
+
+                    // ---> SKIP NON-DEFAULT DESTINATIONS <---
+                    if (param->destination_type != DEST_DEFAULT) continue;
 
                     if (param->name) {
                         if (param->raw_string_value != NULL) {
@@ -1245,7 +1267,7 @@ static char *build_abrp_payload(const char *raw_json, const char *car_model)
 /// @brief
 /// @param
 
-void autopid_publish_all_destinations(void)
+void autopid_publish_all_destinations(bool is_event_trigger)
 {
     if (!autopid_config)
     {
@@ -1265,7 +1287,6 @@ void autopid_publish_all_destinations(void)
         return;
     }
 
-
     // Inject timestamp into snapshot JSON (only if enabled!)
     if (config_server_get_mqtt_include_timestamp() == 1)
     {
@@ -1273,10 +1294,20 @@ void autopid_publish_all_destinations(void)
         if (ts_root)
         {
             cJSON_AddNumberToObject(ts_root, "timestamp", (double)time(NULL));
-            free(raw_json);
-            raw_json = cJSON_PrintUnformatted(ts_root);
+            char *new_json = cJSON_PrintUnformatted(ts_root);
             cJSON_Delete(ts_root);
+            
+            if (new_json) {
+                free(raw_json);
+                raw_json = new_json;
+            }
         }
+    }
+
+    // Final safety check to prevent str_len exceptions if payload building failed
+    if (!raw_json) {
+        ESP_LOGE(TAG, "Failed to build JSON payload, skipping destination publish");
+        return;
     }
 
     // Current time not directly needed with wc_timer; timers store absolute expiry in us
@@ -1294,29 +1325,41 @@ void autopid_publish_all_destinations(void)
     //     return;
     // }
 
-
     for (uint32_t i = 0; i < autopid_config->destinations_count; i++)
     {
         group_destination_t *gd = &autopid_config->destinations[i];
         if (!gd->enabled)
             continue;
 
-        // Determine base cycle and current backoff adjusted cycle
-        uint32_t base_cycle = gd->cycle > 0 ? gd->cycle : 10000;
+        // ---> RESTORED EVENT OR TIMER LOGIC <---
+        // Respect the user's UI choice! 0 = Event-Driven, >0 = Timer-Buffered
+        uint32_t base_cycle = gd->cycle; 
         uint32_t effective_cycle = base_cycle;
+        
         if (gd->backoff_ms && gd->backoff_ms > base_cycle)
         {
             effective_cycle = gd->backoff_ms; // apply backoff delay
         }
-        // If we have an effective cycle (>0) use publish_timer; if timer not set (0) schedule immediate publish
-        if (effective_cycle > 0)
+
+        if (effective_cycle == 0) 
         {
-            if (gd->publish_timer != 0 && !wc_timer_is_expired(&gd->publish_timer))
-            {
-                // Not yet time
+            // Event-driven: Only publish if this function was called immediately after a group update
+            if (!is_event_trigger) {
+                continue; 
+            }
+        } 
+        else 
+        {
+            // Timer-driven: Ignore event triggers, let the background polling task handle the schedule
+            if (is_event_trigger) {
                 continue;
             }
+            if (gd->publish_timer != 0 && !wc_timer_is_expired(&gd->publish_timer))
+            {
+                continue; // Not yet time
+            }
         }
+        // ----------------------------------
 
         const char *dest = gd->destination ? gd->destination : "";
         switch (gd->type)
@@ -2094,6 +2137,7 @@ char *autopid_get_config(void)
                     
                     cJSON_AddStringToObject(g_obj, "group_name", grp->name ? grp->name : "Group");
 		    cJSON_AddBoolToObject(g_obj, "enabled", grp->enabled);
+		    if (grp->mqtt_topic) cJSON_AddStringToObject(g_obj, "mqtt_topic", grp->mqtt_topic);
                     if (grp->init) cJSON_AddStringToObject(g_obj, "init", grp->init);
                     cJSON_AddNumberToObject(g_obj, "period", grp->period);
                     
@@ -3349,6 +3393,12 @@ static void publish_parameter_mqtt(parameter_t *param)
     if (!param)
         return;
 
+    // ---> BYPASS FOR BULK GROUPS <---
+    // MQTT_Grp parameters are aggregated and published at the end of the group loop!
+    if (param->destination_type == DEST_MQTT_GRP) {
+        return;
+    }
+
     // Filter: If "onchange" is set, only proceed if value changed
     if (param->onchange)
     {
@@ -3377,6 +3427,7 @@ static void publish_parameter_mqtt(parameter_t *param)
     
     switch (param->destination_type)
     {
+     case DEST_MQTT_GRP:
      case DEST_MQTT_TOPIC:
         // JSON format
         {
@@ -3395,15 +3446,10 @@ static void publish_parameter_mqtt(parameter_t *param)
                 
                 limitJsonDecimalPrecision(param_json);
                 
-               limitJsonDecimalPrecision(param_json);
-                
                 // Add the timestamp BEFORE we print and delete
                 if (config_server_get_mqtt_include_timestamp() == 1) {
                     cJSON_AddNumberToObject(param_json, "timestamp", (double)time(NULL));
                 }
-                
-                // Print to payload
-                payload = cJSON_PrintUnformatted(param_json);
                 
                 // Print to payload
                 payload = cJSON_PrintUnformatted(param_json);
@@ -3433,8 +3479,17 @@ static void publish_parameter_mqtt(parameter_t *param)
 
     if (payload)
     {
-        // Publish to specified destination or default topic
-        if (param->destination && strlen(param->destination) > 0)
+        // ---> NEW GROUP ROUTING LOGIC <---
+        if (param->destination_type == DEST_MQTT_GRP) {
+            if (current_group_mqtt_topic && strlen(current_group_mqtt_topic) > 0) {
+                mqtt_publish(current_group_mqtt_topic, payload, 0, 0, 1);
+                ESP_LOGI(TAG, "Published to group topic %s", current_group_mqtt_topic);
+            } else {
+                ESP_LOGW(TAG, "MQTT_Grp selected but no group topic defined");
+            }
+        }
+        // ---> EXISTING ROUTING <---
+        else if (param->destination && strlen(param->destination) > 0)
         {
             mqtt_publish(param->destination, payload, 0, 0, 1);
             ESP_LOGI(TAG, "Published to %s", param->destination);
@@ -3466,7 +3521,7 @@ static void autopid_publish_task(void *pvParameters)
             // Grouping must remain enabled at runtime
             if (autopid_config && autopid_config->grouping && strcmp("enable", autopid_config->grouping) == 0)
             {
-                autopid_publish_all_destinations();
+                autopid_publish_all_destinations(false);
             }
             else
             {
@@ -4196,7 +4251,7 @@ static void autopid_task(void *pvParameters)
         {
             xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
 
-
+            bool pids_polled = false;
             // ==========================================================================================
             // [NEW] GROUP MODE LOGIC (SYNCHRONIZED)
             // ==========================================================================================
@@ -4205,7 +4260,10 @@ static void autopid_task(void *pvParameters)
                 for (uint32_t g = 0; g < autopid_config->group_count; g++) {
                     pid_group_t *group = &autopid_config->groups[g];
                     if (!group->enabled) continue;		
-                    
+
+                    // ---> SET THE GLOBAL POINTER <---
+                    current_group_mqtt_topic = group->mqtt_topic;
+		    
                     bool active = true;
                     if (group->detection_method == DETECTION_VOLTAGE) {
                         active = dev_status_is_wake_voltage_ok();
@@ -4239,6 +4297,8 @@ static void autopid_task(void *pvParameters)
 		    
                     if (!run_batch) continue;
 
+		    pids_polled = true;
+
                     if (group->init && strlen(group->init) > 0) {
                         /* RESTORED: Simple init send without flush loops */
                         send_commands(group->init, 5);
@@ -4258,12 +4318,88 @@ static void autopid_task(void *pvParameters)
                             }
                         }
                         
-                        if (any_param_enabled) {
+if (any_param_enabled) {
                             // Call our new unified function! (false = Groups use group timers, ignore param timers)
                             execute_pid(curr_pid, false);
                         }
                     }
+
+                    // ==========================================================================================
+                    // [NEW] AGGREGATE AND PUBLISH MQTT_GRP AS ONE BULK MESSAGE
+                    // ==========================================================================================
+                    if (group->mqtt_topic && strlen(group->mqtt_topic) > 0) {
+                        cJSON *grp_json = NULL;
+                        bool has_data = false;
+
+                        for (uint32_t i = 0; i < group->pid_count; i++) {
+                            pid_data_t *curr_pid = group->pids[i];
+                            if (!curr_pid || !curr_pid->enabled) continue;
+
+                            for (uint32_t p = 0; p < curr_pid->parameters_count; p++) {
+                                parameter_t *param = &curr_pid->parameters[p];
+                                if (!param->enabled || param->failed) continue;
+
+                                if (param->destination_type == DEST_MQTT_GRP && param->name) {
+                                    
+                                    // 1. Honor the "On Change" Checkbox
+                                    bool include_param = true;
+                                    if (param->onchange) {
+                                        if (param->raw_string_value != NULL) {
+                                            if (param->last_sent_raw_string && strcmp(param->raw_string_value, param->last_sent_raw_string) == 0) {
+                                                include_param = false;
+                                            }
+                                        } else {
+                                            if (param->value == param->last_sent_value) {
+                                                include_param = false;
+                                            }
+                                        }
+                                    }
+
+                                    // 2. Add to JSON and Update History
+                                    if (include_param) {
+                                        if (!grp_json) grp_json = cJSON_CreateObject();
+                                        if (grp_json) {
+                                            if (param->raw_string_value != NULL) {
+                                                cJSON_AddStringToObject(grp_json, param->name, param->raw_string_value);
+                                                // Update string history
+                                                if (param->last_sent_raw_string) free(param->last_sent_raw_string);
+                                                param->last_sent_raw_string = strdup_psram(param->raw_string_value);
+                                            } else if (param->value != FLT_MAX) {
+                                                if (param->sensor_type == BINARY_SENSOR) {
+                                                    cJSON_AddStringToObject(grp_json, param->name, param->value > 0 ? "on" : "off");
+                                                } else {
+                                                    cJSON_AddNumberToObject(grp_json, param->name, param->value);
+                                                }
+                                                // Update number history
+                                                param->last_sent_value = param->value;
+                                            }
+                                            has_data = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Publish the Bulk Payload
+                        if (has_data && grp_json) {
+                            limitJsonDecimalPrecision(grp_json);
+                            if (config_server_get_mqtt_include_timestamp() == 1) {
+                                cJSON_AddNumberToObject(grp_json, "timestamp", (double)time(NULL));
+                            }
+                            char *payload = cJSON_PrintUnformatted(grp_json);
+                            if (payload) {
+                                mqtt_publish(group->mqtt_topic, payload, 0, 0, 1);
+                                ESP_LOGI(TAG, "Published bulk group payload to %s", group->mqtt_topic);
+                                free(payload);
+                            }
+                        }
+                        if (grp_json) {
+                            cJSON_Delete(grp_json);
+                        }
+                    }
+
                 }
+		current_group_mqtt_topic = NULL;
             }
 
             // ==========================================================================================
@@ -4304,6 +4440,7 @@ static void autopid_task(void *pvParameters)
                     }
 
                     if (any_due) {
+		        pids_polled = true;
                         if (curr_pid->pid_type != previous_pid_type) {
                             // FORCE a protocol reset when switching list types
                             current_active_init = NULL; 
@@ -4331,8 +4468,8 @@ static void autopid_task(void *pvParameters)
 
             xSemaphoreGive(autopid_config->mutex);
 
-            /* [NEW] Signal processing task NOW, when the mutex is free */
-            if (autopid_processing_task_handle != NULL) {
+            /* [NEW] Signal processing task ONLY if PIDs were actually polled */
+            if (pids_polled && autopid_processing_task_handle != NULL) {
                 xTaskNotifyGive(autopid_processing_task_handle);
             }	
         }
@@ -4566,7 +4703,7 @@ void autopid_init(char *id, bool enable_logging, uint32_t logging_period)
 
 
     /* [NEW] Allocate memory and create the Processing Task (Lower Priority: 5) */
-    uint32_t proc_stack_depth = 4096;
+   uint32_t proc_stack_depth = 1024 * 12;
     autopid_processing_task_stack = heap_caps_malloc(proc_stack_depth, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     
     if (autopid_processing_task_stack != NULL) {
@@ -4611,10 +4748,6 @@ void autopid_init(char *id, bool enable_logging, uint32_t logging_period)
     }
 }
 
-/**
- * @brief This task handles the "heavy lifting" (JSON building and MQTT)
- * so that the OBD sampler doesn't have to wait for string formatting.
- */
 static void autopid_processing_task(void *pvParameters) {
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -4622,7 +4755,11 @@ static void autopid_processing_task(void *pvParameters) {
         // Try to take the lock, but don't hang the whole system if sampler is busy
         if (autopid_lock(500)) { 
             autopid_data_update(autopid_config); // Build JSON
-            autopid_unlock();
+            
+            // <--- UNLOCK EARLY! Don't hold the car polling hostage during slow HTTP posts.
+            autopid_unlock(); 
+            
+            autopid_publish_all_destinations(true); // <--- [NEW] EVENT DRIVEN PUBLISH
             
             // Allow the system to breathe after heavy string processing
             vTaskDelay(1); 

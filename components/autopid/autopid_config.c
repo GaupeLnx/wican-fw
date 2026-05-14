@@ -126,6 +126,7 @@ static destination_type_t destination_type_from_string(const char *t) {
     if (!t) return DEST_DEFAULT;
     if (strcasecmp(t, "MQTT_Topic") == 0) return DEST_MQTT_TOPIC;
     if (strcasecmp(t, "MQTT_WallBox") == 0) return DEST_MQTT_WALLBOX;
+    if (strcasecmp(t, "MQTT_Grp") == 0) return DEST_MQTT_GRP;
     if (strcasecmp(t, "HTTP") == 0) return DEST_HTTP;
     if (strcasecmp(t, "HTTPS") == 0) return DEST_HTTPS;
     if (strcasecmp(t, "ABRP_API") == 0) return DEST_ABRP_API;
@@ -907,6 +908,9 @@ autopid_config_t *load_autopid_config(void)
                 cJSON* cond = cJSON_GetObjectItem(g, "condition");
                 cJSON* period = cJSON_GetObjectItem(g, "period");
 		cJSON* enabled_item = cJSON_GetObjectItem(g, "enabled");
+
+		cJSON* mqtt_topic_item = cJSON_GetObjectItem(g, "mqtt_topic");
+                grp->mqtt_topic = (mqtt_topic_item && mqtt_topic_item->valuestring) ? strdup_psram(mqtt_topic_item->valuestring) : NULL;
                 
                 grp->name = json_strdup_key_or_default(g, "group_name", "Group");
                 grp->enabled = (enabled_item && cJSON_IsBool(enabled_item)) ? cJSON_IsTrue(enabled_item) : true;
