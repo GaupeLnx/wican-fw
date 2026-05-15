@@ -2,20 +2,16 @@ name: Deploy Docus Site
 on:
   push:
     branches:
-      - wican-pro
+      - wican-pro # Explicitly target your new branch
+
 permissions:
   contents: read
   pages: write
   id-token: write
 
 jobs:
-  build_and_deploy:
+  build:
     runs-on: ubuntu-latest
-    # THIS LINE IS THE FIX:
-    defaults:
-      run:
-        working-directory: ./docs
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,24 +21,28 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
+      - name: Install & Build
+        working-directory: ./docs # Step into your docs folder
         run: |
           npm install --legacy-peer-deps
           npm install --save-dev @nuxt/vite-builder vite --legacy-peer-deps
-      - name: Patch Broken Pinceau Dependency
-        # Note: We use the full path here to ensure the echo hits the right spot
-        run: |
           echo "export const PinceauTheme = {};" >> node_modules/pinceau/dist/index.mjs
           echo "export const PropertyValue = {};" >> node_modules/pinceau/dist/index.mjs
-
-      - name: Generate Static Site
-        run: npm run generate
+          npm run generate
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Point this to the output folder inside docs
-          path: docs/.output/public
+          # This tells GitHub: "Take the files from THIS folder and make them the website"
+          path: docs/.output/public 
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
