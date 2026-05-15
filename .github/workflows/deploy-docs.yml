@@ -11,6 +11,11 @@ permissions:
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
+    # THIS LINE IS THE FIX:
+    defaults:
+      run:
+        working-directory: ./docs
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,12 +24,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          # cache: 'npm'
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
       - name: Patch Broken Pinceau Dependency
+        # Note: We use the full path here to ensure the echo hits the right spot
         run: |
           echo "export const PinceauTheme = {};" >> node_modules/pinceau/dist/index.mjs
           echo "export const PropertyValue = {};" >> node_modules/pinceau/dist/index.mjs
@@ -35,7 +40,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .output/public
+          # Point this to the output folder inside docs
+          path: docs/.output/public
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
