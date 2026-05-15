@@ -1,6 +1,9 @@
 export default defineNuxtConfig({
   // https://github.com/nuxt-themes/docus
   extends: ['@nuxt-themes/docus'],
+  app: {
+    baseURL: '/wican-fw/' 
+  },
 
   devtools: { enabled: false },
   nitro: {
