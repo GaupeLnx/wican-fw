@@ -2,7 +2,7 @@ export default defineNuxtConfig({
   // https://github.com/nuxt-themes/docus
   extends: ['@nuxt-themes/docus'],
 
-  devtools: { enabled: true },
+  devtools: { enabled: false },
 
   modules: [
     // Remove it if you don't use Plausible analytics
