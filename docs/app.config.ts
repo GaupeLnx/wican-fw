@@ -4,7 +4,7 @@ export default defineAppConfig({
     title: 'WiCAN Docs',
     description: 'Docs and guides around WiCAN',
     socials: {
-      github: 'meatpiHQ/wican-fw',
+      github: 'wambs/wican-fw',
     },
     aside: {
       level: 0,
