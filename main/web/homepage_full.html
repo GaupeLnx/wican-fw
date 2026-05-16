@@ -134,7 +134,7 @@
         }
 
 
-.settings-subtabs {
+       .settings-subtabs {
             display: flex;
             flex-wrap: wrap;
             gap: 0.75rem;
@@ -169,6 +169,43 @@
             display: none;
         }	
 
+
+.status-subtabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .status-subtablinks {
+            border: 1px solid var(--gray-200);
+            background-color: var(--white);
+            color: var(--gray-700);
+            padding: 0.7rem 1.1rem;
+            min-height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .status-subtablinks:hover {
+            background-color: var(--gray-100);
+            color: var(--primary-color);
+        }
+
+        .status-subtablinks.active {
+            background-color: var(--primary-color) !important;
+            border-color: var(--primary-color) !important;
+            color: var(--white) !important;
+        }
+
+        .status-subtabcontent {
+            display: none;
+        }
+
+	
         .automate-subtabcontent {
             display: none;
         }
@@ -837,157 +874,78 @@
                 </tr>
             </table>
         </div>
+
         <div id="status_view" class="tabcontent">
-            <div class="section-title">Status</div>
-            <table class="form-table">
-                <tr>
-                    <td>WiFi Mode:</td>
-                    <td>
-                        <div id="wifi_mode_current">AP&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>AP Channel:</td>
-                    <td>
-                        <div id="ap_channel_status">6&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>WiFi Station:</td>
-                    <td>
-                        <div id="sta_status">Not Connected&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Station IP:</td>
-                    <td>
-                        <div id="sta_ip">192.168.3.1&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>DNS Main:</td>
-                    <td>
-                        <div id="dns_main_status">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>DNS Backup:</td>
-                    <td>
-                        <div id="dns_backup_status">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Time Synced:</td>
-                    <td>
-                        <div id="time_synced_status">No&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>mDNS:</td>
-                    <td>
-                        <div id="mdns">&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>CAN Bitrate:</td>
-                    <td>
-                        <div id="can_bitrate_status">500K&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>CAN Mode:</td>
-                    <td>
-                        <div id="can_mode_status">Silent&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Port Type:</td>
-                    <td>
-                        <div id="port_type_status">TCP&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>TCP/UDP Port:</td>
-                    <td>
-                        <div id="port_status">3333&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Battery Voltage:</td>
-                    <td>
-                        <div id="batt_voltage">12.8V&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>VPN Status:</td>
-                    <td>
-                        <div id="vpn_status">Disconnected&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>OBD Chip Status:</td>
-                    <td>
-                        <div id="obd_chip_status">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Time to Sleep:</td>
-                    <td>
-                        <div id="time_to_sleep">N/A&nbsp;</div>
-                    </td>
-                </tr>		
-                <tr>
-                    <td>Uptime:</td>
-                    <td>
-                        <div id="uptime">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Last Reset:</td>
-                    <td>
-                        <div id="restart_last_reset_reason">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Planned Restart:</td>
-                    <td>
-                        <div id="restart_last_planned_reason">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Restart Source:</td>
-                    <td>
-                        <div id="restart_last_source">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Last Boot Time:</td>
-                    <td>
-                        <div id="restart_last_boot_time">N/A&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Boot Count:</td>
-                    <td>
-                        <div id="restart_boot_count">0&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Unexpected Resets:</td>
-                    <td>
-                        <div id="restart_unexpected_reset_count">0&nbsp;</div>
-                    </td>
-                </tr>
-                <tr>
-                    <td><input id="check_status_button" name="check_status_button" type="button" onclick="checkStatus()"
-                            value="Check status" /></td>
-                    <td>&nbsp;</td>
-                </tr>
-            </table>
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Status</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/status" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
+
+          <div class="status-subtabs">
+              <button type="button" class="status-subtablinks active" id="statusSubDefaultOpen" onclick="openStatusSubTab(event, 'status_network')">Network</button>
+              <button type="button" class="status-subtablinks" onclick="openStatusSubTab(event, 'status_hardware')">Hardware & CAN</button>
+              <button type="button" class="status-subtablinks" onclick="openStatusSubTab(event, 'status_system')">System Diagnostics</button>
+          </div>
+
+          <div id="status_network" class="status-subtabcontent" style="display: block;">
+              <table class="form-table">
+                  <tr><td>WiFi Mode:</td><td><div id="wifi_mode_current">AP&nbsp;</div></td></tr>
+                  <tr><td>AP Channel:</td><td><div id="ap_channel_status">6&nbsp;</div></td></tr>
+                  <tr><td>WiFi Station:</td><td><div id="sta_status">Not Connected&nbsp;</div></td></tr>
+                  <tr><td>Station IP:</td><td><div id="sta_ip">192.168.3.1&nbsp;</div></td></tr>
+                  <tr><td>DNS Main:</td><td><div id="dns_main_status">N/A&nbsp;</div></td></tr>
+                  <tr><td>DNS Backup:</td><td><div id="dns_backup_status">N/A&nbsp;</div></td></tr>
+                  <tr><td>mDNS:</td><td><div id="mdns">&nbsp;</div></td></tr>
+                  <tr><td>VPN Status:</td><td><div id="vpn_status">Disconnected&nbsp;</div></td></tr>
+              </table>
+          </div>
+
+          <div id="status_hardware" class="status-subtabcontent" style="display: none;">
+              <table class="form-table">
+                  <tr><td>CAN Bitrate:</td><td><div id="can_bitrate_status">500K&nbsp;</div></td></tr>
+                  <tr><td>CAN Mode:</td><td><div id="can_mode_status">Silent&nbsp;</div></td></tr>
+                  <tr><td>Port Type:</td><td><div id="port_type_status">TCP&nbsp;</div></td></tr>
+                  <tr><td>TCP/UDP Port:</td><td><div id="port_status">3333&nbsp;</div></td></tr>
+                  <tr><td>Battery Voltage:</td><td><div id="batt_voltage">12.8V&nbsp;</div></td></tr>
+                  <tr><td>OBD Chip Status:</td><td><div id="obd_chip_status">N/A&nbsp;</div></td></tr>
+              </table>
+          </div>
+
+          <div id="status_system" class="status-subtabcontent" style="display: none;">
+              <table class="form-table">
+                  <tr><td>Time Synced:</td><td><div id="time_synced_status">No&nbsp;</div></td></tr>
+                  <tr><td>Time to Sleep:</td><td><div id="time_to_sleep">N/A&nbsp;</div></td></tr>		
+                  <tr><td>Uptime:</td><td><div id="uptime">N/A&nbsp;</div></td></tr>
+                  <tr><td>Last Reset:</td><td><div id="restart_last_reset_reason">N/A&nbsp;</div></td></tr>
+                  <tr><td>Planned Restart:</td><td><div id="restart_last_planned_reason">N/A&nbsp;</div></td></tr>
+                  <tr><td>Restart Source:</td><td><div id="restart_last_source">N/A&nbsp;</div></td></tr>
+                  <tr><td>Last Boot Time:</td><td><div id="restart_last_boot_time">N/A&nbsp;</div></td></tr>
+                  <tr><td>Boot Count:</td><td><div id="restart_boot_count">0&nbsp;</div></td></tr>
+                  <tr><td>Unexpected Resets:</td><td><div id="restart_unexpected_reset_count">0&nbsp;</div></td></tr>
+              </table>
+          </div>
+
+          <div class="divider"></div>
+          <table class="form-table">
+              <tr>
+                  <td>
+                      <input id="check_status_button" name="check_status_button" type="button" onclick="checkStatus()" value="Check status" class="system-button success-button" />
+                  </td>
+                  <td>&nbsp;</td>
+              </tr>
+          </table>
         </div>
 
         <div id="wifi_settings" class="tabcontent">
-            <div class="section-title">WiCAN Pro Settings</div>
+          
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>WiCAN Pro Settings</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/settings" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
 
             <form id="configForm" name="configForm" action="/action_page" onchange="submit_enable();">
                 
@@ -1503,8 +1461,14 @@
 
 	
 
-        <div id="automate" class="tabcontent">
-            <div class="section-title">Automate</div>
+          <div id="automate" class="tabcontent">
+          
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Automate</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/low-voltage-behavior" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <table class="form-table">
                 <tr style="display: none;">
                     <td>Data Grouping:</td>
@@ -1558,7 +1522,12 @@
                 </div>
             </div>
             
-            <div class="section-title" style="margin-top:1rem;">Home Assistant</div>
+           <div class="section-title" style="margin-top:1rem; display: flex; justify-content: space-between; align-items: center;">
+            <span>Home Assistant</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/webhook" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>WebHook:</td>
@@ -1639,7 +1608,12 @@
                     </div>
                 </div>
             </div>
-            <div class="section-title" style="margin-top:1rem;">User Destinations</div>
+            <div class="section-title" style="margin-top:1rem; display: flex; justify-content: space-between; align-items: center;">
+            <span>User Destinations</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/user-destinations" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <div id="destinations_section" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
                     <div style="font-weight:600;">Configured Destinations</div>
@@ -1649,7 +1623,12 @@
                 <div style="font-size:0.7rem; color:#555; margin-top:0.5rem;">Cycle &ge; 1000 ms (or 0 for event). HTTPS requires a cert set (or 'default' embedded CA). ABRP_API requires a token. To add more certs go to System tab.</div>
             </div>
 
-	    <div class="section-title" style="margin-top:1rem;">Active Vehicle Profile</div>
+	    <div class="section-title" style="margin-top:1rem; display: flex; justify-content: space-between; align-items: center;">
+            <span>Active Vehicle Profile</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/active-vehicle-profile" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <div class="description-text" style="margin-bottom: 1rem; color: #555;">
                 Select a profile below to load or save the current vehicle
                 PIDs profile. Loading a profile populates PID data across <b>All
@@ -1684,7 +1663,12 @@
                 <button class="automate-subtablinks" onclick="openAutomateSubTab(event, 'automate_custom')">User Custom</button>
             </div>
             <div id="automate_std" class="automate-subtabcontent">
-                <div class="section-title">Standard PIDs</div>
+               <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Standard PIDs</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/standard-pids" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
                 <table class="form-table">
                     <tr>
                         <td>Standard PIDs:</td>
@@ -1725,7 +1709,12 @@
             </div>
 
                 <div id="automate_vehicle" class="automate-subtabcontent">
-                <div class="section-title">Vehicle Specific PIDs</div>
+                <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Vehicle Specific PIDs</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/vehicle-specific" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+             </a>
+            </div>
                 <div class="description-text" style="margin-bottom: 1rem; color: #555;">
                     These are the flat, legacy PIDs loaded from your Active Vehicle Profile.
                 </div>
@@ -1763,7 +1752,12 @@
             </div>
 
             <div id="automate_groups" class="automate-subtabcontent">
-                <div class="section-title">Vehicle Groups (Advanced)</div>
+                <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Vehicle Groups (Advanced)</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/automate/vehicle-groups" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+             </a>
+            </div>
                 <div class="description-text" style="margin-bottom: 1rem; color: #555;">
                     Groups allow conditional logic (e.g. "Engine Running") and adaptive polling rates.
                     These are loaded from the selected Vehicle Profile.
@@ -1782,11 +1776,18 @@
 	    
             <div id="automate_custom" class="automate-subtabcontent">
 
-                <div class="section-title-row">
-                    <div class="section-title section-title--no-underline">Custom PIDs</div>
+<div class="section-title-row" style="display: flex; justify-content: space-between; align-items: center;">
+                    
+                    <div class="section-title section-title--no-underline" style="margin: 0;">Custom PIDs</div>
+                    
+                    <a href="https://wambs.github.io/wican-fw/web_interface/automate/user-custom" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+                        &#9432; View Documentation
+                    </a>
+
                     <div class="section-title-actions">
                         <button onclick="addRowAutoTable()" class="primary-button success-button">New PID</button>
                     </div>
+                    
                 </div>
                 <table class="form-table">
                     <tr>
@@ -1821,7 +1822,12 @@
         </div>
 
         <div id="monitor" class="tabcontent">
-            <div class="section-title">Monitor Settings</div>
+           <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Monitor Settings</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/can-monitor" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>Bitrate</td>
@@ -1869,10 +1875,15 @@
         </div>
 
         <div id="terminal_tab" class="tabcontent">
-            <div class="section-title" style="justify-content:space-between; align-items:center; gap:12px; display:flex">
-                <span>Terminal</span>
-                <span id="terminal_status_badge" class="status-indicator status-disconnected" title="Terminal status">Disconnected</span>
-            </div>
+<div class="section-title" style="justify-content:space-between; align-items:center; gap:12px; display:flex">
+            <span>Terminal</span>
+            
+            <a href="https://wambs.github.io/wican-fw/web_interface/terminal" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+
+            <span id="terminal_status_badge" class="status-indicator status-disconnected" title="Terminal status">Disconnected</span>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>Terminal Type:</td>
@@ -1898,7 +1909,12 @@
             </div>
         </div>
         <div id="power_saving_tab" class="tabcontent">
-            <div class="section-title">Sleep Mode</div>
+            <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Sleep Mode</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/power-saving" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>Sleep Mode:</td>
@@ -2086,7 +2102,12 @@
             </table>
         </div>
         <div id="advanced_tab" class="tabcontent">
-            <div class="section-title">Advanced Settings</div>
+           <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Advanced Settings</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/advanced" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>Motion Threshold:</td>
@@ -2127,7 +2148,12 @@
             </div>
         </div>
         <div id="system_tab" class="tabcontent">
-          <div class="section-title">System</div>
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>System</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/system" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
                 <tr>
                     <td>Local Timezone:</td>
                     <td>
@@ -2281,10 +2307,15 @@
         </div>
 
         <div id="vpn_tab" class="tabcontent">
-            <div class="section-title" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-                <span>VPN Settings</span>
-                <span id="vpn_status_badge" class="status-indicator status-disconnected" title="VPN status">Disconnected</span>
-            </div>
+          <div class="section-title" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+            <span>VPN Settings</span>
+            
+            <a href="https://wambs.github.io/wican-fw/web_interface/vpn" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+
+            <span id="vpn_status_badge" class="status-indicator status-disconnected" title="VPN status">Disconnected</span>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>VPN:</td>
@@ -2306,20 +2337,20 @@
                     Interface
                 </div>
                 <table class="form-table">
-                    <tr>
-                        <td>Private Key:</td>
-                        <td>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="text" id="wg_private_key" name="wg_private_key" placeholder="Loaded from config file" readonly style="flex: 1;" />
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>Public Key:</td>
-                        <td>
-                            <input type="text" id="wg_public_key" name="wg_public_key" placeholder="Loaded from config file" readonly />
-                        </td>
-                    </tr>
+                <tr>
+                   <td>Private Key:</td>
+                <td>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="wg_private_key" name="wg_private_key" placeholder="Enter or load Private Key" oninput="submit_enable();" style="flex: 1;" />
+               </div>
+              </td>
+              </tr>
+              <tr>
+                <td>Public Key:</td>
+                <td>
+                 <input type="text" id="wg_public_key" name="wg_public_key" placeholder="Enter or load Public Key" oninput="submit_enable();" />
+                </td>
+              </tr>
                     <tr>
                         <td>Address:</td>
                         <td>
@@ -2428,7 +2459,12 @@
         </div>
                
         <div id="about_tab" class="tabcontent">
-            <div class="section-title">About</div>
+            <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>About</span>
+            <a href="https://wambs.github.io/wican-fw/web_interface/about" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+              &#9432; View Documentation
+            </a>
+          </div>
             <table class="form-table">
                 <tr>
                     <td>Firmware ver:</td>
@@ -2451,9 +2487,33 @@
                 <tr>
                     <td>Designed By:</td>
                     <td>
-                        <div id="made_by"><a href="https://www.meatpi.com/"><b>meatpi.com</b></a></div>
+                        <div id="made_by"><a href="https://www.meatpi.com/" target="_blank"><b>meatpi.com</b></a></div>
                     </td>
                 </tr>
+                <tr>
+                    <td>Documentation:</td>
+                    <td>
+                        <a href="https://wambs.github.io/wican-fw/" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+                            &#9432; Forked Docs
+                        </a>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Firmware Source:</td>
+                    <td>
+                        <a href="https://github.com/wambs/wican-fw/" target="_blank" style="color: #007bff; text-decoration: none; font-size: 14px; font-weight: bold;">
+                            &#9432; Forked Firmware
+                        </a>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Discord Community:</td>
+                    <td>
+                        <a href="https://discord.com/invite/2hpHVDmyfw" target="_blank" style="color: #7289da; text-decoration: none; font-size: 14px; font-weight: bold;">
+                            &#128172; Join MeatPi Discord
+                        </a>
+                    </td>
+                </tr>		
             </table>
         </div>
         <input id="submit_button" name="submit_button" type="button" onclick="postConfig()" value="Submit Changes" disabled />

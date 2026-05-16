@@ -2859,6 +2859,10 @@ function openTab(evt, tabName) {
     if (tabName === 'wifi_settings') {
         try { ensureSettingsSubTabInitialized(); } catch(_) {}
     }
+
+    if (tabName === 'status_view') {
+        try { document.getElementById('statusSubDefaultOpen').click(); } catch(_) {}
+    }
     // ----------------------------------------
     
     if (tabName === 'dashboard_tab') {
@@ -8009,4 +8013,29 @@ function toggleDestinationCycleVisibility() {
     cycleRows.forEach(row => {
         row.style.display = 'table-row';
     });
+}
+
+
+function openStatusSubTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    
+    // Hide all tab content
+    tabcontent = document.getElementsByClassName("status-subtabcontent");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = "none";
+    }
+    
+    // Remove the background color of all tablinks/buttons
+    tablinks = document.getElementsByClassName("status-subtablinks");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+    }
+    
+    // Show the specific tab content
+    document.getElementById(tabName).style.display = "block";
+    
+    // Add the "active" class to the button that opened the tab
+    if (evt && evt.currentTarget) {
+        evt.currentTarget.className += " active";
+    }
 }
