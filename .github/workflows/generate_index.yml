@@ -4,7 +4,7 @@ name: Generate Profile Index
 on:
   push:
     branches:
-      - main
+      - wican-pro 
     paths:
       - 'profiles/**.json'
       - 'scripts/generate_index.py'
