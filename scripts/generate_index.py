@@ -10,11 +10,14 @@ PROFILES_DIR = os.path.join(SCRIPT_DIR, '..', 'profiles')
 INDEX_FILE = os.path.join(PROFILES_DIR, 'index.json')
 
 def generate_index():
+    # ---> NEW: Create the folder automatically if it doesn't exist <---
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    
     profiles_list = []
     
     # Grab all .json files in the profiles directory
     search_pattern = os.path.join(PROFILES_DIR, '*.json')
-    
+
     for filepath in glob.glob(search_pattern):
         filename = os.path.basename(filepath)
         
