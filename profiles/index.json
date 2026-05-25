@@ -3,6 +3,10 @@
     {
       "name": "2015 Fusion Hybrid",
       "file": "wican_profile_ford_fusion_hybrid.json"
+    },
+    {
+      "name": "KIA EV3 2024 Long Range",
+      "file": "wican_profile_kia_ev3_2024_long_range.json"
     }
   ]
 }
