@@ -1792,7 +1792,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	if (sscanf(running_app_info->version, "v%ld.%ld", &firmware_ver_major, &firmware_ver_minor) == 2) 
 	{
 		ESP_LOGI(TAG, "Firmware version: %ld.%ld", firmware_ver_major, firmware_ver_minor);
-	} 
+	}
 
     sprintf(fver, "%ld.%02ld", firmware_ver_major, firmware_ver_minor);
     sprintf(hver, "WiCAN-%s", HARDWARE_VERSION);
@@ -1802,7 +1802,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "ap_ssid_en", device_config.ap_ssid_en);
 	cJSON_AddStringToObject(root, "ap_ssid", device_config.ap_ssid);
 	cJSON_AddStringToObject(root, "ap_auto_disable", device_config.ap_auto_disable);
-
+ 
         if(!remove_sensitive_info)
 	{
 		cJSON_AddStringToObject(root, "sta_ssid", device_config.sta_ssid);
