@@ -56,6 +56,7 @@
 #include "wc_mdns.h"
 #include "vpn_manager.h"
 #include "restart_tracker.h"
+#include "autopid.h"
 
 // #define TAG 		__func__
 #define TAG         "SLEEP_MODE"
@@ -584,6 +585,7 @@ int8_t sleep_mode_init(uint8_t enable, float sleep_volt)
 
 	return 1;
 }
+
 #elif HARDWARE_VER == WICAN_PRO
 #include <string.h>
 #include <stdio.h>
@@ -888,9 +890,9 @@ void configure_wakeup_sources(void)
 
 void enter_deep_sleep(void)
 {
-	static char response_buffer[32];
-	static uint32_t response_len = 0;
-	static int64_t response_cmd_time = 0;
+  // static char response_buffer[32];
+  //	static uint32_t response_len = 0;
+  //	static int64_t response_cmd_time = 0;
 	esp_err_t sleep_ret = ESP_OK;
     ESP_LOGI(TAG, "Entering deep sleep");
     configure_wakeup_sources();
@@ -952,6 +954,10 @@ void light_sleep_task(void *pvParameters)
     }
 
     use_scheduled_wakeup = config_server_get_use_scheduled_wakeups();
+
+
+    // Initialize configuration
+    uint8_t sleep_mode = config_server_get_sleep_config();
     
     // if(config_server_get_wakeup_volt(&wakeup_voltage) == -1) 
 	// {
@@ -1026,26 +1032,41 @@ void light_sleep_task(void *pvParameters)
             }
         }
 
-        if (ret == ESP_OK && sleep_en == 1) 
-		{
+        if (ret == ESP_OK && sleep_mode > 0)
+        {
             // State machine logic
             switch (current_state) 
-			{
+            {
                 case STATE_NORMAL:
-                    if (battery_voltage < sleep_voltage) 
-					{
-                        ESP_LOGW(TAG, "Battery voltage low (%.2fV), starting low voltage timer", battery_voltage);
+                {
+                    bool should_sleep = false;
+                    if (sleep_mode == 1 && battery_voltage < sleep_voltage) {
+                        should_sleep = true;
+                    } else if (sleep_mode == 2 && !autopid_car_is_on()) {
+                        should_sleep = true;
+                    }
+
+                    if (should_sleep) 
+                    {
+                        ESP_LOGW(TAG, "Sleep condition met, starting countdown timer");
                         current_state = STATE_LOW_VOLTAGE;
                         wc_timer_set(&sleep_timer, sleep_time);
-
-			sleep_target_time_us = esp_timer_get_time() + ((uint64_t)sleep_time * 1000ULL);
+                        sleep_target_time_us = esp_timer_get_time() + ((uint64_t)sleep_time * 1000ULL);
                     }
                     break;
+                }
 
                 case STATE_LOW_VOLTAGE:
-                    if (battery_voltage >= wakeup_voltage) 
+                    bool should_abort_sleep = false;
+                    if (sleep_mode == 1 && battery_voltage >= wakeup_voltage) {
+                        should_abort_sleep = true;
+                    } else if (sleep_mode == 2 && autopid_car_is_on()) {
+                        should_abort_sleep = true;
+                    }
+
+                    if (should_abort_sleep) 
 					{
-                        ESP_LOGI(TAG, "Battery voltage recovered (%.2fV)", battery_voltage);
+                        ESP_LOGI(TAG, "Condition recovered, returning to normal mode");
                         current_state = STATE_NORMAL;
                     } 
                     else if (wc_timer_is_expired(&sleep_timer)) 
@@ -1078,6 +1099,7 @@ void light_sleep_task(void *pvParameters)
                             wc_timer_set(&periodic_wakeup_timer, wakeup_interval);
                         }
                     }
+	       
                     break;
 
                 case STATE_SLEEPING:

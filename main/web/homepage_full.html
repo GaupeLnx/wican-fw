@@ -1923,17 +1923,33 @@
             </a>
           </div>
             <table class="form-table">
-                <tr>
-                    <td>Sleep Mode:</td>
+	      
+               <tr>
+                    <td>Keep Awake Based On:</td>
                     <td>
-                        <select name="sleep_status" id="sleep_status" onChange="toggleSleepWarning();submit_enable();">
-                            <option value="enable">Enable</option>
+                        <select name="sleep_status" id="sleep_status" onChange="togglePowerSavingUi();submit_enable();">
                             <option value="disable">Disable</option>
+                            <option value="voltage" selected>Voltage</option>
+                            <option value="pid">Specified PID</option>
                         </select>
                     </td>
                 </tr>
-                <tr>
-                    <td>Sleep Voltage:</td>
+                <tr id="ps_pid_row" style="display:none;">
+                    <td>Keep Awake If:</td>
+                    <td>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="text" id="car_on_param" placeholder="PID Name (e.g. Engine RPM)" style="flex:2;" oninput="submit_enable();">
+                            <select id="car_on_operator" style="flex:1;" onchange="submit_enable();">
+                                <option value=">">&gt;</option>
+                                <option value="<">&lt;</option>
+                                <option value="==">==</option>
+                            </select>
+                            <input type="number" id="car_on_value" placeholder="Value" style="flex:1;" oninput="submit_enable();">
+                        </div>
+                    </td>
+                </tr>
+                <tr id="ps_volt_row">
+                    <td><span id="ps_volt_label">Sleep/Wake Voltage Threshold:</span></td>
                     <td class="slider-container">
                         <input type="range" 
                                id="sleep_volt" 
@@ -1946,6 +1962,9 @@
                         <span id="sleep_volt_value">13.2</span>V
                     </td>
                 </tr>
+
+
+		
                 <tr>
                     <td>Sleep After:</td>
                     <td class="slider-container">

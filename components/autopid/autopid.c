@@ -51,6 +51,7 @@
 #include "ha_webhooks.h"
 #include "autopid_config.h"
 #include "esp_heap_caps.h"
+#include "autopid.h"
 
 // #define TAG __func__
 #define TAG "AUTO_PID"
@@ -75,6 +76,9 @@
 #ifndef AUTOPID_BACKOFF_MAX_MULTIPLIER
 #define AUTOPID_BACKOFF_MAX_MULTIPLIER 2
 #endif
+
+
+
 
 /* [NEW] Task handle for the asynchronous processing engine */
 static TaskHandle_t autopid_processing_task_handle = NULL;
@@ -123,6 +127,39 @@ static void send_commands(char *commands, uint32_t delay_ms);
 static void publish_parameter_mqtt(parameter_t *param);
 static void autopid_data_update(autopid_config_t *pids);
 static void autopid_processing_task(void *pvParameters);
+
+static volatile int32_t s_last_car_on_valid_stamp = -1;
+
+void autopid_pid_update_hook(parameter_t *param, float value) {
+    if (!param || !param->name) return;
+    const char *gate_param = config_server_get_car_on_param();
+    if (!gate_param || strlen(gate_param) == 0) return;
+
+    if (strstr(param->name, gate_param) != NULL || strstr(gate_param, param->name) != NULL) {
+        
+        const char *op = config_server_get_car_on_operator();
+        const char *val_str = config_server_get_car_on_value();
+        if (!op || !val_str) return;
+
+        float threshold = atof(val_str);
+        bool condition_met = false;
+
+        // Safely catch standard operators OR their HTML-encoded equivalents
+        if ((strstr(op, ">") || strstr(op, "&gt;")) && value > threshold) condition_met = true;
+        else if ((strstr(op, "<") || strstr(op, "&lt;")) && value < threshold) condition_met = true;
+        else if ((strstr(op, "=") || strstr(op, "&eq;")) && value == threshold) condition_met = true;
+
+        if (condition_met) {
+            s_last_car_on_valid_stamp = (int32_t)(esp_timer_get_time() / 1000000ULL);
+        }
+    }
+}
+
+bool autopid_car_is_on(void) {
+    int32_t t = s_last_car_on_valid_stamp;
+    return t >= 0 && ((int32_t)(esp_timer_get_time() / 1000000ULL) - t) < 65;
+}
+
 
 
 // --- HELPER: Check for RPM to detect Engine Running (NEW) ---
@@ -2375,6 +2412,7 @@ static void process_can_filter_frame(can_filter_t *f, const response_t *rsp)
                 param->failed = false;
                 ESP_LOGI(TAG, "CANFLT 0x%lX param=%s result=%.2f", (unsigned long)f->frame_id,
                          param->name ? param->name : "(null)", (double)param->value);
+		autopid_pid_update_hook(param, param->value);
                 publish_parameter_mqtt(param);
             }
         }
@@ -2389,7 +2427,6 @@ static void process_can_filter_frame(can_filter_t *f, const response_t *rsp)
 
 void parse_elm327_response(char *buffer, response_t *response)
 {
-
     if (buffer == NULL || response == NULL)
     {
         ESP_LOGE(TAG, "Invalid buffer or response pointer");
@@ -2398,17 +2435,34 @@ void parse_elm327_response(char *buffer, response_t *response)
 
     ESP_LOGI(TAG, "Starting to parse ELM327 response. Input buffer: %s", buffer);
 
+    // --- FIXED: Allocate the backup buffer safely on the HEAP, not the stack! ---
+    size_t buf_len = strlen(buffer);
+    char *original_buffer = heap_caps_malloc(buf_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (original_buffer != NULL) {
+        strcpy(original_buffer, buffer);
+    } else {
+        ESP_LOGE(TAG, "Failed to allocate original_buffer on heap");
+    }
+    // ----------------------------------------------------------------------------
+    
     int k = 0;
     int frame_count = 0;
     char *frame;
     char *data_start;
-    uint32_t lowest_header = UINT32_MAX; // Initialize to maximum value
-    uint32_t highest_header = 0;         // Track highest header
+    uint32_t lowest_header = UINT32_MAX; 
+    uint32_t highest_header = 0;         
     uint32_t first_header = 0;
     bool all_headers_same = true;
-    uint8_t *lowest_header_data = NULL; // Store the actual data pointer
+    uint8_t *lowest_header_data = NULL; 
     uint8_t lowest_header_length = 0;
 
+    // --- ISO-TP TRACKING VARIABLES ---
+    uint32_t multiframe_header = 0;
+    bool is_iso_tp_multiframe = false;
+    uint8_t expected_seq = 1;
+    bool sequence_error = false;
+    // ---------------------------------
+    
     frame = strtok(buffer, "\r\n");
     ESP_LOGI(TAG, "First frame: %s", frame ? frame : "NULL");
 
@@ -2445,57 +2499,70 @@ void parse_elm327_response(char *buffer, response_t *response)
             uint32_t current_header = strtoul(header_str, NULL, 16);
             ESP_LOGD(TAG, "Frame %d header: 0x%lX (length: %d)", frame_count, current_header, header_length);
 
-            // Track highest header
             if (current_header > highest_header)
             {
-                ESP_LOGD(TAG, "New highest header found: 0x%lX (previous: 0x%lX)", current_header, highest_header);
                 highest_header = current_header;
             }
 
-            // Track first header and compare subsequent headers
             if (frame_count == 1)
             {
                 first_header = current_header;
-                ESP_LOGD(TAG, "First header set to: 0x%lX", first_header);
             }
             else if (current_header != first_header)
             {
                 all_headers_same = false;
-                ESP_LOGD(TAG, "Different header detected: 0x%lX != 0x%lX", current_header, first_header);
             }
 
             data_start++;
             if (current_protocol_number == -1 || (current_protocol_number > sizeof(autopid_protocol_header_length)))
             {
-                // Handle different header formats
                 switch (header_length)
                 {
                 case 2:
                     data_start += 9;
-                    ESP_LOGW(TAG, "2-byte header format: Adjusted data_start by 9");
                     break;
                 case 3:
                 case 8:
-                    ESP_LOGW(TAG, "%d-byte header format: No adjustment needed", header_length);
                     break;
                 default:
-                    ESP_LOGW(TAG, "Unexpected header length: %d, skipping frame", header_length);
                     frame = strtok(NULL, "\r\n");
                     continue;
                 }
             }
             else
             {
-                // Adjust data_start based on protocol number
-                ESP_LOGI(TAG, "Adjusting data_start based on protocol number: %ld, header length: + %d", current_protocol_number, autopid_protocol_header_length[current_protocol_number]);
                 data_start += (uint8_t)autopid_protocol_header_length[current_protocol_number];
             }
 
-            // Store start position for copying data
             char *current_data_start = data_start;
             int current_length = 0;
 
-            // Count data bytes in current frame
+            // --- ISO-TP SEQUENCE VALIDATOR ---
+            char *pci_start = current_data_start;
+            while (*pci_start == ' ') pci_start++; 
+            
+            if (strlen(pci_start) >= 2) {
+                char pci_byte_str[3] = {pci_start[0], pci_start[1], 0};
+                uint8_t pci_byte = (uint8_t)strtol(pci_byte_str, NULL, 16);
+                
+                if (is_iso_tp_multiframe && current_header == multiframe_header) {
+                    if ((pci_byte & 0xF0) == 0x20) {
+                        uint8_t seq = pci_byte & 0x0F;
+                        if (seq != expected_seq) {
+                            sequence_error = true;
+                            break; 
+                        }
+                        expected_seq = (expected_seq + 1) & 0x0F;
+                    }
+                } 
+                else if (!is_iso_tp_multiframe && (pci_byte & 0xF0) == 0x10) {
+                    is_iso_tp_multiframe = true;
+                    multiframe_header = current_header;
+                    expected_seq = 1;
+                }
+            }
+            // ---------------------------------
+            
             char *temp_data = data_start;
             while (*temp_data != '\0')
             {
@@ -2510,14 +2577,11 @@ void parse_elm327_response(char *buffer, response_t *response)
                 temp_data += 2;
             }
 
-            // If this is the lowest header so far, store its data
             if (current_header < lowest_header)
             {
-                ESP_LOGD(TAG, "New lowest header found: 0x%lX (previous: 0x%lX)", current_header, lowest_header);
                 lowest_header = current_header;
                 lowest_header_length = current_length;
 
-                // Allocate space and copy data for lowest header frame
                 if (lowest_header_data == NULL)
                 {
                     lowest_header_data = (uint8_t *)heap_caps_malloc(current_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -2527,7 +2591,6 @@ void parse_elm327_response(char *buffer, response_t *response)
                     lowest_header_data = (uint8_t *)heap_caps_realloc(lowest_header_data, current_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 }
 
-                // Parse and store the data bytes for this frame
                 int idx = 0;
                 while (*current_data_start != '\0')
                 {
@@ -2543,11 +2606,8 @@ void parse_elm327_response(char *buffer, response_t *response)
                     lowest_header_data[idx++] = (unsigned char)strtol(byte_str, NULL, 16);
                     current_data_start += 2;
                 }
-                ESP_LOGD(TAG, "Stored %d bytes from lowest header frame", idx);
             }
 
-            // Parse data bytes into main response buffer
-            ESP_LOGV(TAG, "Starting data byte parsing at position: %s", data_start);
             while (*data_start != '\0')
             {
                 if (*data_start == ' ')
@@ -2557,13 +2617,11 @@ void parse_elm327_response(char *buffer, response_t *response)
                 }
                 if (strlen(data_start) < 2)
                 {
-                    ESP_LOGW(TAG, "Incomplete byte at end of frame: %s", data_start);
                     break;
                 }
 
                 char byte_str[3] = {data_start[0], data_start[1], 0};
                 response->data[k] = (unsigned char)strtol(byte_str, NULL, 16);
-                ESP_LOGV(TAG, "Parsed byte %d: 0x%02X from %s", k, response->data[k], byte_str);
                 k++;
                 data_start += 2;
             }
@@ -2575,42 +2633,61 @@ void parse_elm327_response(char *buffer, response_t *response)
         frame = strtok(NULL, "\r\n");
     }
 
+    // --- ABORT, REJECT, AND BUNDLE HEX FOR UI ---
+    if (sequence_error) {
+        if (original_buffer != NULL) {
+            // Flatten the original buffer (replace newlines with spaces)
+            for(int i = 0; original_buffer[i] != '\0'; i++) {
+                if(original_buffer[i] == '\r' || original_buffer[i] == '\n') {
+                    original_buffer[i] = ' ';
+                }
+            }
+            snprintf((char *)response->data, AUTOPID_BUFFER_SIZE, "error: missing frames [%.1024s]", original_buffer);
+        } else {
+            snprintf((char *)response->data, AUTOPID_BUFFER_SIZE, "error: missing frames");
+        }
+        
+        response->length = strlen((char *)response->data);
+        
+        if (lowest_header_data != NULL) {
+            free(lowest_header_data);
+            lowest_header_data = NULL;
+        }
+        response->priority_data = NULL;
+        response->priority_data_len = 0;
+        
+        // FREE THE HEAP POINTER BEFORE RETURNING
+        if (original_buffer != NULL) {
+            free(original_buffer);
+        }
+        return;
+    }
+    // --------------------------------------------
+
+    // Clean up heap pointer if parsing succeeded
+    if (original_buffer != NULL) {
+        free(original_buffer);
+    }
+
     response->length = k;
 
-    // Set priority data based on frame count and header comparison
     if (frame_count <= 2 || all_headers_same)
+    {
+        response->priority_data = NULL;
+        response->priority_data_len = 0;
+        if (lowest_header_data != NULL)
         {
-            response->priority_data = NULL;
-            response->priority_data_len = 0;
-            if (lowest_header_data != NULL)
-            {
-                free(lowest_header_data);
-                lowest_header_data = NULL;
-            }
-        ESP_LOGI(TAG, "Null priority data set - frames: %d, all headers same: %d",
-                 frame_count, all_headers_same);
+            free(lowest_header_data);
+            lowest_header_data = NULL;
+        }
     }
     else
     {
         response->priority_data = lowest_header_data;
         response->priority_data_len = lowest_header_length;
-
-        if (response->priority_data != NULL && response->priority_data_len > 0)
-        {
-            ESP_LOGI(TAG, "Priority data set - length: %u, starting with byte: 0x%02X",
-                     response->priority_data_len,
-                     response->priority_data[0]);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Priority data set but empty or invalid - length: %u",
-                     response->priority_data_len);
-        }
     }
-
-    ESP_LOGI(TAG, "Parsing complete. Headers - Lowest: 0x%lX, Highest: 0x%lX, Total frames: %d, Total bytes: %lu, Priority data length: %u",
-             lowest_header, highest_header, frame_count, response->length, response->priority_data_len);
 }
+  
 
 static void append_to_buffer(char *buffer, const char *new_data)
 {
@@ -2981,6 +3058,9 @@ void autopid_parser(char *str, uint32_t len, QueueHandle_t *q, char *cmd_str)
                 sprintf((char *)response->data, "error");
                 response->length = strlen((char *)response->data);
                 ESP_LOGE(TAG, "Error response: %s", auto_pid_buf);
+                // kww HARD FIX: Ensure string buffer is cleared on error frames as well
+                auto_pid_buf[0] = '\0';
+		
                 if (xQueueSend(autopidQueue, response, pdMS_TO_TICKS(1000)) != pdPASS)
                 {
                     ESP_LOGE(TAG, "Failed to send to queue");
@@ -3076,18 +3156,36 @@ static bool try_parse_protocol_cmd(const char *cmd, int32_t *out_protocol)
 
 static void send_commands(char *commands, uint32_t delay_ms)
 {
-    if (!commands)
-        return;
+    if (!commands) return;
 
     char *cmd_start = commands;
-    char *cmd_end;
-
-    while ((cmd_end = strchr(cmd_start, '\r')) != NULL)
+    
+    // Loop until we reach the end of the string
+    while (*cmd_start != '\0')
     {
-        size_t cmd_len = cmd_end - cmd_start + 1; // +1 to include '\r'
-        char str_send[cmd_len + 1];               // +1 for null terminator
+        // Skip leading spaces, \r, \n, or semicolons
+        while (*cmd_start == ' ' || *cmd_start == '\r' || *cmd_start == '\n' || *cmd_start == ';') {
+            cmd_start++;
+        }
+        if (*cmd_start == '\0') break;
+
+        // Find the end of this command (marked by \r, \n, ;, or end of string)
+        char *cmd_end = cmd_start;
+        while (*cmd_end != '\0' && *cmd_end != '\r' && *cmd_end != '\n' && *cmd_end != ';') {
+            cmd_end++;
+        }
+
+        size_t cmd_len = cmd_end - cmd_start;
+        if (cmd_len == 0) {
+            cmd_start = cmd_end;
+            continue;
+        }
+
+        // Create a temporary buffer for the command and explicitly append \r
+        char str_send[cmd_len + 2]; 
         strncpy(str_send, cmd_start, cmd_len);
-        str_send[cmd_len] = '\0'; // Null-terminate the command string
+        str_send[cmd_len] = '\r';   // ELM327 requires \r
+        str_send[cmd_len + 1] = '\0'; 
 
         // Keep protocol tracking in sync if init strings switch protocol.
         int32_t new_protocol_number = -1;
@@ -3098,13 +3196,10 @@ static void send_commands(char *commands, uint32_t delay_ms)
             if (autopid_get_protocol_number(&current_protocol_number) == ESP_OK &&
                 current_protocol_number == new_protocol_number)
             {
-                // Already in the requested protocol; avoid re-sending the command.
-                // skip_send = true; // Commented out to ensure command reaches ELM for safety
                 skip_send = false;
             }
             else
             {
-                // Update tracking early so downstream logic (header length etc.) stays consistent.
                 autopid_set_protocol_number(new_protocol_number);
             }
         }
@@ -3115,20 +3210,19 @@ static void send_commands(char *commands, uint32_t delay_ms)
             (strstr(str_send, "ate1") == NULL && strstr(str_send, "ATE1") == NULL && strstr(str_send, "at e1") == NULL && strstr(str_send, "AT E1") == NULL))
         {
 #if HARDWARE_VER == WICAN_PRO
-            // elm327_process_cmd((uint8_t *)str_send, cmd_len, &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser);
-            elm327_run_command((char *)str_send, cmd_len, 1000, &autopidQueue, NULL, false, 0);
+            // RESTORED: Use the stable elm327_process_cmd. 
+            // elm327_run_command causes FreeRTOS spinlock panics due to pointer mismatch.
+            elm327_process_cmd((uint8_t *)str_send, cmd_len + 1, &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser);
 #else
             twai_message_t tx_msg;
-            elm327_process_cmd((uint8_t *)str_send, cmd_len, &tx_msg, &autopidQueue);
+            elm327_process_cmd((uint8_t *)str_send, cmd_len + 1, &tx_msg, &autopidQueue);
 #endif
         }
 
-        cmd_start = cmd_end + 1; // Move to the start of the next command
+        cmd_start = cmd_end; 
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 }
-
-//////////////////
 
 
 
@@ -3136,6 +3230,16 @@ char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len, bool is_d
 
     if (!data || data_len == 0) return NULL;
 
+    // --- NEW: SMUGGLE OUR CUSTOM ERROR STRING THROUGH ---
+    if (strstr((char *)data, "error: missing frames") != NULL) {
+        char *error_str = heap_caps_malloc(data_len + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+        if (error_str) {
+            strncpy(error_str, (char *)data, data_len);
+            error_str[data_len] = '\0';
+            return error_str;
+        }
+    }
+    // ----------------------------------------------------
     
     // 1. If user explicitly requested DTC_RAW, run the formatting
     if (is_dtc) {
@@ -3237,6 +3341,16 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
         }
     }
 
+    // HARD FIX: Flush the residual string accumulation buffers to prevent cross-talk
+    if (auto_pid_buf != NULL) {
+        auto_pid_buf[0] = '\0';
+    } 
+    #if HARDWARE_VER == WICAN_PRO
+    if (elm327_autopid_cmd_buffer != NULL) {
+        elm327_autopid_cmd_buffer[0] = '\0';
+    }
+    #endif
+
     ESP_LOGI(TAG, "Executing command: %s", curr_pid->cmd);
 
     #if HARDWARE_VER == WICAN_PRO
@@ -3298,6 +3412,7 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                                 else if (param->max != FLT_MAX && result > param->max) { } 
                                 else {
                                     param->value = (float)(round(result * 100.0) / 100.0);
+				    autopid_pid_update_hook(param, param->value);
                                     publish_parameter_mqtt(param);
                                 }
                             } else { param->failed = true; }
@@ -3318,6 +3433,7 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                                    }
                                     if (err == ESP_OK) {
                                         param->value = roundf(param->value * 100.0) / 100.0;
+					autopid_pid_update_hook(param, param->value);
                                         publish_parameter_mqtt(param);
                                     }
                                     break;
@@ -4232,7 +4348,7 @@ static void autopid_task(void *pvParameters)
     ESP_LOGI(TAG, "Total PIDs: %lu", autopid_config->pid_count);
     ESP_LOGI(TAG, "Total CAN Filters: %lu", autopid_config->can_filters_count);
     wc_timer_set(&ecu_check_timer, 2000);
-
+    
     while (1)
     {
         static pid_type_t previous_pid_type = PID_MAX;
@@ -4250,7 +4366,10 @@ static void autopid_task(void *pvParameters)
             obd_logger_enable();
         }
 
-        if (autopid_config->disable_on_sleep_voltage && !dev_status_is_wake_voltage_ok()) {
+	// --- NEW: BYPASS VOLTAGE PAUSE IF USING PID SLEEP MODE ---
+        if (config_server_get_sleep_config() != 2) {
+	  
+	  if (autopid_config->disable_on_sleep_voltage && !dev_status_is_wake_voltage_ok()) {
             ESP_LOGI(TAG, "Voltage below sleep threshold, pausing autopid until voltage recovers");
             obd_logger_disable();
             dev_status_set_bits(DEV_AUTOPID_IDLE_BIT);
@@ -4258,7 +4377,8 @@ static void autopid_task(void *pvParameters)
             dev_status_clear_bits(DEV_AUTOPID_IDLE_BIT);
             ESP_LOGI(TAG, "Voltage OK, resuming autopid task");
             obd_logger_enable();
-        }
+	  }
+	}
 
         if (!dev_status_is_autopid_enabled()) {
             ESP_LOGI(TAG, "Autopid is disabled, waiting for enable");
@@ -4272,10 +4392,18 @@ static void autopid_task(void *pvParameters)
             vTaskDelay(pdMS_TO_TICKS(100));
         }
 
-        // Optional low-voltage behaviors that only pause PID polling (CAN filters/monitoring stays active).
+
+         // Optional low-voltage behaviors that only pause PID polling...
         float batt_v = NAN;
         const char *pause_reason = NULL;
-        bool pid_polling_paused = autopid_should_pause_pid_polling(&batt_v, &pause_reason);
+        bool pid_polling_paused = false;
+        
+        // --- NEW: BYPASS PAUSE HERE AS WELL ---
+        if (config_server_get_sleep_config() != 2) {
+            pid_polling_paused = autopid_should_pause_pid_polling(&batt_v, &pause_reason);
+        }
+
+	
         if (pid_polling_paused != pid_polling_paused_prev)
         {
             if (pid_polling_paused)
@@ -4341,6 +4469,8 @@ static void autopid_task(void *pvParameters)
                                ESP_LOGI(TAG, "Group '%s' MQTT timeout expired. Auto-disabling.", group->name);
                            } else { active = true; }
                        } else { active = false; }
+
+		       
                     } else if (group->detection_method == DETECTION_CUSTOM_PID) {
                         // --- NEW: THE GATEKEEPER LOGIC ---
                         if (now_ms < group->next_allowed_time_ms) {

@@ -3984,6 +3984,9 @@ async function postConfig() {
     obj["ble_status"] = document.getElementById("ble_status").value;
     obj["ble_power"] = document.getElementById("ble_power").value; // BLE TX power (dBm)
     obj["sleep_status"] = document.getElementById("sleep_status").value;
+    obj["car_on_param"] = document.getElementById("car_on_param")?.value || "";
+    obj["car_on_operator"] = document.getElementById("car_on_operator")?.value || ">";
+    obj["car_on_value"] = document.getElementById("car_on_value")?.value || "0";
     obj["sleep_disable_agree"] = document.getElementById("sleep_disable_agree").value;
     // --- CHANGED WAKEUP SAVING LOGIC ---
     obj["wakeup_mode"] = document.getElementById("wakeup_mode").value;
@@ -4588,17 +4591,24 @@ async function Load() {
             document.getElementById("ble_status").selectedIndex = 1;
         }
         if(obj.sleep_status == "enable") {
-            document.getElementById("sleep_status").selectedIndex = "0";
-        } else if(obj.sleep_status == "disable") {
-            document.getElementById("sleep_status").selectedIndex = "1";
+            document.getElementById("sleep_status").value = "voltage"; // Legacy Migration
+        } else {
+            document.getElementById("sleep_status").value = obj.sleep_status || "voltage";
         }
+        
+        if (document.getElementById("car_on_param")) {
+            document.getElementById("car_on_param").value = obj.car_on_param || "";
+            document.getElementById("car_on_operator").value = obj.car_on_operator || ">";
+            document.getElementById("car_on_value").value = obj.car_on_value || "0";
+        }
+
+        togglePowerSavingUi();
 
         if(obj.sleep_disable_agree == "yes") {
             document.getElementById("sleep_disable_agree").selectedIndex = "1";
         } else {
             document.getElementById("sleep_disable_agree").selectedIndex = "0";
         }
-        toggleSleepWarning();
 
         // --- CHANGED WAKEUP LOAD LOGIC ---
         document.getElementById("timezone").value = obj.timezone || "CST6CDT,M3.2.0,M11.1.0";
@@ -5355,16 +5365,43 @@ function storeCANFLT() {
     document.getElementById("store_canflt_button").disabled = true;
 }
 
-function toggleSleepWarning() {
-    const sleepStatus = document.getElementById("sleep_status").value;
+function togglePowerSavingUi() {
+    const sleepStatus = document.getElementById("sleep_status");
+    const mode = sleepStatus ? sleepStatus.value : "voltage";
+    
     const sleepWarningDiv = document.getElementById("sleep_warning_div");
     const agreementSelect = document.getElementById("sleep_disable_agree");
     
-    if (sleepStatus === "disable") {
-        sleepWarningDiv.style.display = "block";
-        agreementSelect.value = "no";
+    const pidRow = document.getElementById("ps_pid_row");
+    const voltRow = document.getElementById("ps_volt_row");
+    const timeRow = document.getElementById("ps_time_row"); 
+    const voltLabel = document.getElementById("ps_volt_label");
+    
+    if (mode === "disable") {
+        if (sleepWarningDiv) sleepWarningDiv.style.display = "block";
+        if (agreementSelect) agreementSelect.value = "no";
+        
+        if (pidRow) pidRow.style.display = "none";
+        if (voltRow) voltRow.style.display = "none";
+        if (timeRow) timeRow.style.display = "none";
     } else {
-        sleepWarningDiv.style.display = "none";
+        // Safely hide the warning!
+        if (sleepWarningDiv) sleepWarningDiv.style.display = "none";
+        if (agreementSelect) agreementSelect.value = "yes"; 
+        
+        if (mode === "pid") {
+            if (pidRow) pidRow.style.display = "table-row";
+            if (voltRow) voltRow.style.display = "table-row";
+            if (timeRow) timeRow.style.display = "table-row";
+            
+            if (voltLabel) voltLabel.innerHTML = "Wake Voltage Threshold:";
+        } else { // voltage mode
+            if (pidRow) pidRow.style.display = "none";
+            if (voltRow) voltRow.style.display = "table-row";
+            if (timeRow) timeRow.style.display = "table-row";
+            
+            if (voltLabel) voltLabel.innerHTML = "Sleep/Wake Voltage Threshold:";
+        }
     }
 }
 
@@ -6592,10 +6629,37 @@ async function testGroup(gIndex) {
 
                 // --- BATCH UI UPDATE ---
                 if (!responseData || !responseData.ok) {
-                    const errorMsg = responseData ? responseData.error : "Error";
+                    let errorMsg = responseData ? responseData.error : "Error";
+                    let extractedHex = null;
+                    
+                    // 1. Intercept the dropped frame error and extract the hex
+                    if (errorMsg && errorMsg.includes("error: missing frames")) {
+                        const match = errorMsg.match(/\[(.*?)\]/);
+                        if (match) extractedHex = match[1].trim();
+                        errorMsg = "Missing Frames (PID Discarded)";
+                    } 
+                    // 2. Catch the ELM327 Timeout (Caused by dropped frame)
+                    else if (errorMsg && errorMsg.includes("NO DATA")) {
+                        errorMsg = "Timeout / Dropped Frame (NO DATA)";
+                    }
+
                     uiLines.forEach((line, idx) => {
                         line.innerHTML = `- ${paramsToTest[idx].name}: <span style="color:#ef4444;">${errorMsg}</span>`;
                     });
+
+                    // Display the extracted hex with a large red warning
+                    if (extractedHex && !rawHexHasBeenShown) {
+                        rawHexHasBeenShown = true;
+                        const rawDiv = document.createElement('div');
+                        rawDiv.style.cssText = "padding-left:15px; font-family:monospace; color:#64748b; font-size:0.8em; margin:0; line-height:1.4;";
+                        rawDiv.innerHTML = `<strong style="font-size:1.2em; color:#ef4444;">ERROR: MISSING FRAMES</strong><br>Raw Hex: ${extractedHex}`;
+                        
+                        if (resultsDiv.firstChild) {
+                            resultsDiv.insertBefore(rawDiv, resultsDiv.firstChild);
+                        } else {
+                            resultsDiv.appendChild(rawDiv);
+                        }
+                    }
                 } else {
                     
                     // HANDLE RAW HEX (Only print it once at the top)
@@ -6630,7 +6694,28 @@ async function testGroup(gIndex) {
                             val = responseData.value;
                         }
                         
-                        if (val === null) {
+                        // --- 3. CATCH THE SMUGGLED ERROR STRING ---
+                        if (typeof val === 'string' && val.includes("error: missing frames")) {
+                            const match = val.match(/\[(.*?)\]/);
+                            let extractedHex = match ? match[1].trim() : null;
+
+                            paramLine.innerHTML = `- ${param.name}: <span style="color:#ef4444;">Missing Frames (PID Discarded)</span>`;
+
+                            if (extractedHex && !rawHexHasBeenShown) {
+                                rawHexHasBeenShown = true;
+                                const rawDiv = document.createElement('div');
+                                rawDiv.style.cssText = "padding-left:15px; font-family:monospace; color:#64748b; font-size:0.8em; margin:0; line-height:1.4;";
+                                rawDiv.innerHTML = `<strong style="font-size:1.2em; color:#ef4444;">ERROR: MISSING FRAMES</strong><br>Raw Hex: ${extractedHex}`;
+                                
+                                if (resultsDiv.firstChild) {
+                                    resultsDiv.insertBefore(rawDiv, resultsDiv.firstChild);
+                                } else {
+                                    resultsDiv.appendChild(rawDiv);
+                                }
+                            }
+                        } 
+                        // Standard Error / Success rendering
+                        else if (val === null) {
                             paramLine.innerHTML = `- ${param.name}: <span style="color:#ef4444;">Eval Failed</span>`;
                         } else {
                             paramLine.innerHTML = `- ${param.name}: <span style="color:#34d399; font-weight:bold;">${val}</span> <span style="color:#aaa;">${param.unit || ''}</span>`;
