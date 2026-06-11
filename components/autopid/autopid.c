@@ -3371,7 +3371,65 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
             if (strstr((char *)elm327_response->data, "error") == NULL &&
                 strstr((char *)elm327_response->data, "SEARCHING") == NULL &&
                 strstr((char *)elm327_response->data, "UNABLE TO CONNECT") == NULL) {
-                
+
+
+                    // ====================================================================
+                    // NEW: UNIVERSAL STRUCTURAL DID VALIDATION & ALIGNMENT
+                    // ====================================================================
+                    if (strncmp(curr_pid->cmd, "22", 2) == 0 && strlen(curr_pid->cmd) >= 6) {
+                        
+                        // Extract expected DID safely
+                        char hex1[3] = {curr_pid->cmd[2], curr_pid->cmd[3], '\0'};
+                        char hex2[3] = {curr_pid->cmd[4], curr_pid->cmd[5], '\0'};
+                        
+                        uint8_t exp_b1 = (uint8_t)strtol(hex1, NULL, 16);
+                        uint8_t exp_b2 = (uint8_t)strtol(hex2, NULL, 16);
+
+                        int payload_start = -1;
+
+                        // Scan the first 6 bytes to bypass ISO-TP headers (10 XX) or concatenated NRC stall frames (7F 22 78)
+                        for (int b = 0; b < 6 && b <= elm327_response->length - 3; b++) {
+                            if (elm327_response->data[b] == 0x62 && 
+                                elm327_response->data[b+1] == exp_b1 && 
+                                elm327_response->data[b+2] == exp_b2) {
+                                
+                                // Found the DID! Now look backwards to find the true start of the CAN frame
+                                if (b == 0) {
+                                    payload_start = 0; 
+                                } 
+                                else if (b == 1 && elm327_response->data[0] <= 0x07) {
+                                    payload_start = 0; // Single frame PCI byte is at index 0
+                                }
+                                else if (b >= 1 && elm327_response->data[b-1] <= 0x07) {
+                                    payload_start = b - 1; // Single frame PCI byte
+                                }
+                                else if (b >= 2 && elm327_response->data[b-2] >= 0x10 && elm327_response->data[b-2] <= 0x1F) {
+                                    payload_start = b - 2; // ISO-TP First Frame (10 XX)
+                                } 
+                                else {
+                                    payload_start = b; // Fallback alignment
+                                }
+                                break;
+                            }
+                        }
+
+                        if (payload_start == -1) {
+                            ESP_LOGE(TAG, "CROSSTALK REJECTED: DID %02X%02X not found. Dropping.", exp_b1, exp_b2);
+                            if (elm327_response->priority_data != NULL) free(elm327_response->priority_data);
+                            free(elm327_response);
+                            return; // Drop bad frame silently
+                        }
+
+                        // Shift the array to erase concatenated 7F 22 78 frames, restoring pure payload structure
+                        if (payload_start > 0) {
+                            elm327_response->length -= payload_start;
+                            memmove(elm327_response->data, &elm327_response->data[payload_start], elm327_response->length);
+                            memset(&elm327_response->data[elm327_response->length], 0, AUTOPID_BUFFER_SIZE - elm327_response->length);
+                        }
+                    }
+                    // ====================================================================
+
+	      
                 xEventGroupSetBits(xautopid_event_group, ECU_CONNECTED_BIT);
                 autopid_config->last_successful_pid_time = time(NULL);
 		
