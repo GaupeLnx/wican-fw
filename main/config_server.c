@@ -106,6 +106,7 @@
 
 #include "esp_heap_caps.h"
 #include "cJSON.h"
+#include "lwip/netif.h"
 
 #define WIFI_CONNECTED_BIT			BIT0
 static EventGroupHandle_t xServerEventGroup = NULL;
@@ -1985,49 +1986,97 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 		cJSON_AddStringToObject(root, "ecu_status", "offline");
 	}
 
-	// Add VPN status information
+
+  // === TAILSCALE UI STATUS PATCH ===
+	char stored_vpn_type[32] = "disable";
+	nvs_handle_t vpn_nvs;
+	if (nvs_open("vpn", NVS_READONLY, &vpn_nvs) == ESP_OK) {
+		size_t len = sizeof(stored_vpn_type);
+		nvs_get_str(vpn_nvs, "vpn_type", stored_vpn_type, &len);
+		nvs_close(vpn_nvs);
+	}
+
 	vpn_status_t vpn_status = vpn_manager_get_status();
 	const char *vpn_status_str;
-	switch (vpn_status) 
-	{
-		case VPN_STATUS_DISABLED:
-			vpn_status_str = "disabled";
-			break;
-		case VPN_STATUS_DISCONNECTED:
-			vpn_status_str = "disconnected";
-			break;
-		case VPN_STATUS_CONNECTING:
-			vpn_status_str = "connecting";
-			break;
-		case VPN_STATUS_CONNECTED:
-			vpn_status_str = "connected";
-			break;
-		case VPN_STATUS_ERROR:
-			vpn_status_str = "error";
-			break;
-		default:
-			vpn_status_str = "unknown";
-			break;
-	}
-	cJSON_AddStringToObject(root, "vpn_status", vpn_status_str);
-	
-	// Add VPN IP if connected
-	if (vpn_status == VPN_STATUS_CONNECTED) 
-	{
-		char vpn_ip_str[20] = {0};
-		if (vpn_manager_get_ip_address(vpn_ip_str, sizeof(vpn_ip_str)) == ESP_OK) 
+
+	// 1. Check if Tailscale is active via NVS
+	if (strcmp(stored_vpn_type, "tailscale") == 0) {
+		bool ts_is_up = false;
+		char ts_ip[20] = {0};
+		
+		// Scan bare-metal lwIP interfaces (bypassing esp_netif wrapper)
+		extern struct netif *netif_list;
+		struct netif *netif;
+		for (netif = netif_list; netif != NULL; netif = netif->next) {
+			// Check if interface is active and has a valid IP assigned
+			if (netif_is_up(netif) && !ip4_addr_isany_val(*netif_ip4_addr(netif))) {
+				char ip_str[16];
+				ip4addr_ntoa_r(netif_ip4_addr(netif), ip_str, sizeof(ip_str));
+				
+				// Tailscale/Headscale IP allocation check (100.x.x.x)
+				if (strncmp(ip_str, "100.", 4) == 0) {
+					ts_is_up = true;
+					strlcpy(ts_ip, ip_str, sizeof(ts_ip));
+					break;
+				}
+			}
+		}
+
+		if (ts_is_up) {
+			vpn_status_str = "connected (tailscale)";
+			cJSON_AddStringToObject(root, "vpn_status", vpn_status_str);
+			cJSON_AddStringToObject(root, "vpn_ip", ts_ip); 
+		} else {
+			vpn_status_str = "connecting / invalid key (tailscale)";
+			cJSON_AddStringToObject(root, "vpn_status", vpn_status_str);
+			cJSON_AddStringToObject(root, "vpn_ip", "");
+		}
+	} 
+	else {
+		// 2. Fall back to standard WireGuard logic
+		switch (vpn_status) 
 		{
-			cJSON_AddStringToObject(root, "vpn_ip", vpn_ip_str);
+			case VPN_STATUS_DISABLED:
+				vpn_status_str = "disabled";
+				break;
+			case VPN_STATUS_DISCONNECTED:
+				vpn_status_str = "disconnected";
+				break;
+			case VPN_STATUS_CONNECTING:
+				vpn_status_str = "connecting";
+				break;
+			case VPN_STATUS_CONNECTED:
+				vpn_status_str = "connected";
+				break;
+			case VPN_STATUS_ERROR:
+				vpn_status_str = "error";
+				break;
+			default:
+				vpn_status_str = "unknown";
+				break;
+		}
+		cJSON_AddStringToObject(root, "vpn_status", vpn_status_str);
+		
+		// Add VPN IP if connected
+		if (vpn_status == VPN_STATUS_CONNECTED) 
+		{
+			char vpn_ip_str[20] = {0};
+			if (vpn_manager_get_ip_address(vpn_ip_str, sizeof(vpn_ip_str)) == ESP_OK) 
+			{
+				cJSON_AddStringToObject(root, "vpn_ip", vpn_ip_str);
+			}
+			else
+			{
+				cJSON_AddStringToObject(root, "vpn_ip", "");
+			}
 		}
 		else
 		{
 			cJSON_AddStringToObject(root, "vpn_ip", "");
 		}
 	}
-	else
-	{
-		cJSON_AddStringToObject(root, "vpn_ip", "");
-	}
+	// =================================
+
 
     char *resp_str = cJSON_PrintUnformatted(root);
 	cJSON_Delete(root);

@@ -3336,6 +3336,13 @@ function checkStatus() {
         } else if(document.getElementById("mqtt_en").value == "disable") {
             document.getElementById("mqtt_en_div").style.display = "none";
         }
+
+	// This prints the raw data to your F12 Console so we can see it!
+console.log("RAW VPN IP DATA: ", obj.vpn_ip); 
+
+// This pushes the IP to your screen
+	document.getElementById('vpn_ip').innerHTML = obj.vpn_ip;
+	
         // Update VPN text and badge
         const vpnText = obj.vpn_status || 'N/A';
         const vpnTextEl = document.getElementById('vpn_status');
