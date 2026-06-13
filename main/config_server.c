@@ -104,6 +104,9 @@
 #include <ws_router.h>
 #include "ws_server.h"
 
+#include "esp_heap_caps.h"
+#include "cJSON.h"
+
 #define WIFI_CONNECTED_BIT			BIT0
 static EventGroupHandle_t xServerEventGroup = NULL;
 static StaticEventGroup_t server_event_group_buffer;
@@ -252,6 +255,15 @@ static char timezone_val[64] = "CST6CDT,M3.2.0,M11.1.0";
 // --- NEW MQTT TIMESTAMP SETTING ---
 static char mqtt_include_timestamp_val[16] = "enable";
 // ----------------------------------
+
+// Force allocation into PSRAM regardless of size
+static void* cjson_psram_malloc(size_t size) {
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
+static void cjson_psram_free(void *ptr) {
+    heap_caps_free(ptr);
+}
 
 static void config_server_schedule_reboot(restart_tracker_planned_reason_t reason,
 								  restart_tracker_source_t source,
@@ -1774,13 +1786,13 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	// -------------------------------------
 	
 
-    esp_app_desc_t* running_app_info = dev_status_get_running_app_info();
-	uint32_t firmware_ver_minor = 0, firmware_ver_major = 0;
+        esp_app_desc_t* running_app_info = dev_status_get_running_app_info();
+	uint32_t firmware_ver_minor = 06, firmware_ver_major = 1;
 
 	if (sscanf(running_app_info->version, "v%ld.%ld", &firmware_ver_major, &firmware_ver_minor) == 2) 
 	{
 		ESP_LOGI(TAG, "Firmware version: %ld.%ld", firmware_ver_major, firmware_ver_minor);
-	} 
+	}
 
     sprintf(fver, "%ld.%02ld", firmware_ver_major, firmware_ver_minor);
     sprintf(hver, "WiCAN-%s", HARDWARE_VERSION);
@@ -1790,7 +1802,7 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "ap_ssid_en", device_config.ap_ssid_en);
 	cJSON_AddStringToObject(root, "ap_ssid", device_config.ap_ssid);
 	cJSON_AddStringToObject(root, "ap_auto_disable", device_config.ap_auto_disable);
-
+ 
         if(!remove_sensitive_info)
 	{
 		cJSON_AddStringToObject(root, "sta_ssid", device_config.sta_ssid);
@@ -1864,7 +1876,12 @@ char *config_server_get_status_json(bool remove_sensitive_info)
         // --- NEW WAKEUP SETTINGS ---
 	cJSON_AddStringToObject(root, "wakeup_mode", wakeup_mode_val);
 	cJSON_AddStringToObject(root, "scheduled_times", scheduled_times_val);
-	cJSON_AddStringToObject(root, "timezone", timezone_val);	
+	cJSON_AddStringToObject(root, "timezone", timezone_val);
+
+	cJSON_AddStringToObject(root, "sleep_status", device_config.sleep_status);
+	cJSON_AddStringToObject(root, "car_on_param", device_config.car_on_param);
+	cJSON_AddStringToObject(root, "car_on_operator", device_config.car_on_operator);
+	cJSON_AddStringToObject(root, "car_on_value", device_config.car_on_value);
 
 	cJSON_AddStringToObject(root, "batt_alert", device_config.batt_alert);
 	if(!remove_sensitive_info)
@@ -2771,17 +2788,26 @@ static void config_server_load_cfg(char *cfg)
 		ESP_LOGW(TAG, "ble_power missing, defaulting to 9");
 	}
 
-	key = cJSON_GetObjectItem(root,"sleep_status");
-	if(key == 0)
-	{
-		goto config_error;
+        key = cJSON_GetObjectItem(root,"sleep_status");
+	if(key == 0 || key->valuestring == NULL) {
+		strlcpy(device_config.sleep_status, "voltage", sizeof(device_config.sleep_status));
+	} else {
+        if (strcmp(key->valuestring, "enable") == 0) { // Legacy migration
+            strlcpy(device_config.sleep_status, "voltage", sizeof(device_config.sleep_status));
+        } else {
+		    strlcpy(device_config.sleep_status, key->valuestring, sizeof(device_config.sleep_status));
+        }
 	}
-
-	if (key->valuestring == NULL) {
-		goto config_error;
-	}
-	strlcpy(device_config.sleep_status, key->valuestring, sizeof(device_config.sleep_status));
 	ESP_LOGI(TAG, "device_config.sleep_status: %s", device_config.sleep_status);
+
+	key = cJSON_GetObjectItem(root, "car_on_param");
+	strlcpy(device_config.car_on_param, (key && key->valuestring) ? key->valuestring : "", sizeof(device_config.car_on_param));
+	
+	key = cJSON_GetObjectItem(root, "car_on_operator");
+	strlcpy(device_config.car_on_operator, (key && key->valuestring) ? key->valuestring : ">", sizeof(device_config.car_on_operator));
+	
+	key = cJSON_GetObjectItem(root, "car_on_value");
+	strlcpy(device_config.car_on_value, (key && key->valuestring) ? key->valuestring : "0", sizeof(device_config.car_on_value));
 
 	key = cJSON_GetObjectItem(root,"ble_status");
 	if(key == 0)
@@ -3750,6 +3776,12 @@ static httpd_handle_t config_server_init(void)
 
 	if(esp_fatfs_flag == 0) 
 	{
+  	     // --- NEW: FORCE CJSON TO USE PSRAM GLOBALLY ---
+             cJSON_Hooks memory_hooks;
+             memory_hooks.malloc_fn = cjson_psram_malloc;
+             memory_hooks.free_fn = cjson_psram_free;
+             cJSON_InitHooks(&memory_hooks);
+             // -------------------------------
 		filesystem_init();
 		// Initialize certificate manager storage (creates /certs if missing)
 		cert_manager_init();
@@ -3953,16 +3985,14 @@ int8_t config_server_get_ble_config(void)
 
 int8_t config_server_get_sleep_config(void)
 {
-	if(strcmp(device_config.sleep_status, "enable") == 0 || strcmp(device_config.sleep_disable_agree, "no") == 0)
-	{
-		return 1;
-	}
-	else if(strcmp(device_config.sleep_status, "disable") == 0 && strcmp(device_config.sleep_disable_agree, "yes") == 0)
-	{
-		return 0;
-	}
-	return 1;
+	if(strcmp(device_config.sleep_status, "voltage") == 0) return 1;
+	else if(strcmp(device_config.sleep_status, "pid") == 0) return 2;
+	return 0; // disabled
 }
+
+const char *config_server_get_car_on_param(void) { return device_config.car_on_param; }
+const char *config_server_get_car_on_operator(void) { return device_config.car_on_operator; }
+const char *config_server_get_car_on_value(void) { return device_config.car_on_value; }
 
 int8_t config_server_get_sleep_volt(float *sleep_volt)
 {

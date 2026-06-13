@@ -51,6 +51,7 @@
 #include "ha_webhooks.h"
 #include "autopid_config.h"
 #include "esp_heap_caps.h"
+#include "autopid.h"
 
 // #define TAG __func__
 #define TAG "AUTO_PID"
@@ -75,6 +76,9 @@
 #ifndef AUTOPID_BACKOFF_MAX_MULTIPLIER
 #define AUTOPID_BACKOFF_MAX_MULTIPLIER 2
 #endif
+
+
+
 
 /* [NEW] Task handle for the asynchronous processing engine */
 static TaskHandle_t autopid_processing_task_handle = NULL;
@@ -124,6 +128,39 @@ static void publish_parameter_mqtt(parameter_t *param);
 static void autopid_data_update(autopid_config_t *pids);
 static void autopid_processing_task(void *pvParameters);
 
+static volatile int32_t s_last_car_on_valid_stamp = -1;
+
+void autopid_pid_update_hook(parameter_t *param, float value) {
+    if (!param || !param->name) return;
+    const char *gate_param = config_server_get_car_on_param();
+    if (!gate_param || strlen(gate_param) == 0) return;
+
+    if (strstr(param->name, gate_param) != NULL || strstr(gate_param, param->name) != NULL) {
+        
+        const char *op = config_server_get_car_on_operator();
+        const char *val_str = config_server_get_car_on_value();
+        if (!op || !val_str) return;
+
+        float threshold = atof(val_str);
+        bool condition_met = false;
+
+        // Safely catch standard operators OR their HTML-encoded equivalents
+        if ((strstr(op, ">") || strstr(op, "&gt;")) && value > threshold) condition_met = true;
+        else if ((strstr(op, "<") || strstr(op, "&lt;")) && value < threshold) condition_met = true;
+        else if ((strstr(op, "=") || strstr(op, "&eq;")) && value == threshold) condition_met = true;
+
+        if (condition_met) {
+            s_last_car_on_valid_stamp = (int32_t)(esp_timer_get_time() / 1000000ULL);
+        }
+    }
+}
+
+bool autopid_car_is_on(void) {
+    int32_t t = s_last_car_on_valid_stamp;
+    return t >= 0 && ((int32_t)(esp_timer_get_time() / 1000000ULL) - t) < 65;
+}
+
+
 
 // --- HELPER: Check for RPM to detect Engine Running (NEW) ---
 static bool is_engine_running(void) {
@@ -149,29 +186,15 @@ static bool is_engine_running(void) {
     return running;
 }
 
+// buffer fix - replaced function below, old use static for multiple thread calls
 // Helper functions
 //  Custom printer function to format numbers with 2 decimal places
-char *formatNumberPrecision(double num)
-{
-    static char buf[32];
+char *formatNumberPrecision(double num) {
+    static char buf[32]; // <--- THE ASSASSIN
     snprintf(buf, sizeof(buf), "%.2f", num);
-
-    // Remove trailing zeros after decimal point
-    size_t len = strlen(buf);
-    if (strchr(buf, '.'))
-    {
-        while (len > 0 && buf[len - 1] == '0')
-        {
-            buf[--len] = '\0';
-        }
-        if (len > 0 && buf[len - 1] == '.')
-        {
-            buf[--len] = '\0';
-        }
-    }
+    // ...
     return buf;
 }
-
 
   
 static double autopid_round_parameter_value(double value)
@@ -244,7 +267,7 @@ static char *strdup_psram(const char *s)
     return copy;
 }
 
-
+// buffer fix replaced function below
 // Recursively limit decimal precision in the JSON structure
 void limitJsonDecimalPrecision(cJSON *item)
 {
@@ -254,8 +277,8 @@ void limitJsonDecimalPrecision(cJSON *item)
     // If current item is a number, modify its value
     if (cJSON_IsNumber(item))
     {
-        char *formatted = formatNumberPrecision(item->valuedouble);
-        item->valuedouble = atof(formatted);
+        // --- FIXED: Use the native thread-safe math rounder! ---
+        item->valuedouble = autopid_round_parameter_value(item->valuedouble);
         item->valuestring = NULL; // Force cJSON to use valuedouble
     }
 
@@ -520,8 +543,12 @@ esp_err_t autopid_find_standard_pid(uint8_t protocol, char *available_pids, uint
         "01A0\r", // PIDs 0xA1-0xC0
     };
 
-    while (xQueueReceive(autopidQueue, response, pdMS_TO_TICKS(100)) == pdPASS)
-        ;
+   while (xQueueReceive(autopidQueue, response, pdMS_TO_TICKS(100)) == pdPASS) {
+        if (response->priority_data != NULL) {
+            free(response->priority_data);
+            response->priority_data = NULL;
+        }
+    }
     
     ESP_LOGI(TAG, "Starting PID support command processing");
     for (int i = 0; i < sizeof(pid_support_cmds) / sizeof(pid_support_cmds[0]); i++)
@@ -641,6 +668,12 @@ esp_err_t autopid_find_standard_pid(uint8_t protocol, char *available_pids, uint
                 ESP_LOGW(TAG, "Recvied error response: %s", response->data);
             }
         }
+	// buffer fix--- NEW FIX: PREVENT LOOP OVERWRITE LEAK ---
+        if (response->priority_data != NULL) {
+            free(response->priority_data);
+            response->priority_data = NULL;
+        }
+        // buffer fix --------------------------------------------
     }
 
     ESP_LOGI(TAG, "Adding PIDs to JSON object");    
@@ -678,6 +711,12 @@ esp_err_t autopid_find_standard_pid(uint8_t protocol, char *available_pids, uint
     // while (xQueueReceive(autopidQueue, &response, pdMS_TO_TICKS(1000)) == pdPASS);
 
     cJSON_Delete(root);
+
+    // --- NEW: CLEANUP BEFORE RETURN ---
+    if (response->priority_data != NULL) {
+        free(response->priority_data);
+    }
+    
     free(response);
     // elm327_unlock();
     xSemaphoreGive(autopid_config->mutex);
@@ -821,7 +860,7 @@ static void autopid_data_update(autopid_config_t *pids)
 char *autopid_data_read(void)
 {
     // json_str must be freed by the caller
-    static char *json_str = NULL;
+    char *json_str = NULL;
 
     if (!autopid_data.mutex)
     {
@@ -2145,7 +2184,18 @@ char *autopid_get_config(void)
                     const char *cond_str = "always";
                     if (grp->detection_method == DETECTION_VOLTAGE) cond_str = "voltage";
                     else if (grp->detection_method == DETECTION_ADAPTIVE_RPM) cond_str = "engine_running";
+                    else if (grp->detection_method == DETECTION_MQTT) cond_str = "mqtt_on_demand";
+                    else if (grp->detection_method == DETECTION_CUSTOM_PID) cond_str = "custom_pid"; // <--- ADD THIS
                     cJSON_AddStringToObject(g_obj, "condition", cond_str);
+
+                    // --- NEW: Gatekeeper Export ---
+                    cJSON_AddNumberToObject(g_obj, "wake_voltage", grp->wake_voltage);
+                    if (grp->custom_pid_init) cJSON_AddStringToObject(g_obj, "custom_pid_init", grp->custom_pid_init);
+                    if (grp->custom_pid_mode) cJSON_AddStringToObject(g_obj, "custom_pid_mode", grp->custom_pid_mode);
+                    if (grp->custom_pid_expr) cJSON_AddStringToObject(g_obj, "custom_pid_expr", grp->custom_pid_expr);
+                    if (grp->custom_pid_operator) cJSON_AddStringToObject(g_obj, "custom_pid_operator", grp->custom_pid_operator);
+                    cJSON_AddNumberToObject(g_obj, "custom_pid_value", grp->custom_pid_value);
+                    // ------------------------------
 
                     // Add PIDs for this group
                     cJSON *pids_array = cJSON_CreateArray();
@@ -2362,6 +2412,7 @@ static void process_can_filter_frame(can_filter_t *f, const response_t *rsp)
                 param->failed = false;
                 ESP_LOGI(TAG, "CANFLT 0x%lX param=%s result=%.2f", (unsigned long)f->frame_id,
                          param->name ? param->name : "(null)", (double)param->value);
+		autopid_pid_update_hook(param, param->value);
                 publish_parameter_mqtt(param);
             }
         }
@@ -2376,7 +2427,6 @@ static void process_can_filter_frame(can_filter_t *f, const response_t *rsp)
 
 void parse_elm327_response(char *buffer, response_t *response)
 {
-
     if (buffer == NULL || response == NULL)
     {
         ESP_LOGE(TAG, "Invalid buffer or response pointer");
@@ -2385,17 +2435,34 @@ void parse_elm327_response(char *buffer, response_t *response)
 
     ESP_LOGI(TAG, "Starting to parse ELM327 response. Input buffer: %s", buffer);
 
+    // --- FIXED: Allocate the backup buffer safely on the HEAP, not the stack! ---
+    size_t buf_len = strlen(buffer);
+    char *original_buffer = heap_caps_malloc(buf_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (original_buffer != NULL) {
+        strcpy(original_buffer, buffer);
+    } else {
+        ESP_LOGE(TAG, "Failed to allocate original_buffer on heap");
+    }
+    // ----------------------------------------------------------------------------
+    
     int k = 0;
     int frame_count = 0;
     char *frame;
     char *data_start;
-    uint32_t lowest_header = UINT32_MAX; // Initialize to maximum value
-    uint32_t highest_header = 0;         // Track highest header
+    uint32_t lowest_header = UINT32_MAX; 
+    uint32_t highest_header = 0;         
     uint32_t first_header = 0;
     bool all_headers_same = true;
-    uint8_t *lowest_header_data = NULL; // Store the actual data pointer
+    uint8_t *lowest_header_data = NULL; 
     uint8_t lowest_header_length = 0;
 
+    // --- ISO-TP TRACKING VARIABLES ---
+    uint32_t multiframe_header = 0;
+    bool is_iso_tp_multiframe = false;
+    uint8_t expected_seq = 1;
+    bool sequence_error = false;
+    // ---------------------------------
+    
     frame = strtok(buffer, "\r\n");
     ESP_LOGI(TAG, "First frame: %s", frame ? frame : "NULL");
 
@@ -2432,57 +2499,70 @@ void parse_elm327_response(char *buffer, response_t *response)
             uint32_t current_header = strtoul(header_str, NULL, 16);
             ESP_LOGD(TAG, "Frame %d header: 0x%lX (length: %d)", frame_count, current_header, header_length);
 
-            // Track highest header
             if (current_header > highest_header)
             {
-                ESP_LOGD(TAG, "New highest header found: 0x%lX (previous: 0x%lX)", current_header, highest_header);
                 highest_header = current_header;
             }
 
-            // Track first header and compare subsequent headers
             if (frame_count == 1)
             {
                 first_header = current_header;
-                ESP_LOGD(TAG, "First header set to: 0x%lX", first_header);
             }
             else if (current_header != first_header)
             {
                 all_headers_same = false;
-                ESP_LOGD(TAG, "Different header detected: 0x%lX != 0x%lX", current_header, first_header);
             }
 
             data_start++;
             if (current_protocol_number == -1 || (current_protocol_number > sizeof(autopid_protocol_header_length)))
             {
-                // Handle different header formats
                 switch (header_length)
                 {
                 case 2:
                     data_start += 9;
-                    ESP_LOGW(TAG, "2-byte header format: Adjusted data_start by 9");
                     break;
                 case 3:
                 case 8:
-                    ESP_LOGW(TAG, "%d-byte header format: No adjustment needed", header_length);
                     break;
                 default:
-                    ESP_LOGW(TAG, "Unexpected header length: %d, skipping frame", header_length);
                     frame = strtok(NULL, "\r\n");
                     continue;
                 }
             }
             else
             {
-                // Adjust data_start based on protocol number
-                ESP_LOGI(TAG, "Adjusting data_start based on protocol number: %ld, header length: + %d", current_protocol_number, autopid_protocol_header_length[current_protocol_number]);
                 data_start += (uint8_t)autopid_protocol_header_length[current_protocol_number];
             }
 
-            // Store start position for copying data
             char *current_data_start = data_start;
             int current_length = 0;
 
-            // Count data bytes in current frame
+            // --- ISO-TP SEQUENCE VALIDATOR ---
+            char *pci_start = current_data_start;
+            while (*pci_start == ' ') pci_start++; 
+            
+            if (strlen(pci_start) >= 2) {
+                char pci_byte_str[3] = {pci_start[0], pci_start[1], 0};
+                uint8_t pci_byte = (uint8_t)strtol(pci_byte_str, NULL, 16);
+                
+                if (is_iso_tp_multiframe && current_header == multiframe_header) {
+                    if ((pci_byte & 0xF0) == 0x20) {
+                        uint8_t seq = pci_byte & 0x0F;
+                        if (seq != expected_seq) {
+                            sequence_error = true;
+                            break; 
+                        }
+                        expected_seq = (expected_seq + 1) & 0x0F;
+                    }
+                } 
+                else if (!is_iso_tp_multiframe && (pci_byte & 0xF0) == 0x10) {
+                    is_iso_tp_multiframe = true;
+                    multiframe_header = current_header;
+                    expected_seq = 1;
+                }
+            }
+            // ---------------------------------
+            
             char *temp_data = data_start;
             while (*temp_data != '\0')
             {
@@ -2497,14 +2577,11 @@ void parse_elm327_response(char *buffer, response_t *response)
                 temp_data += 2;
             }
 
-            // If this is the lowest header so far, store its data
             if (current_header < lowest_header)
             {
-                ESP_LOGD(TAG, "New lowest header found: 0x%lX (previous: 0x%lX)", current_header, lowest_header);
                 lowest_header = current_header;
                 lowest_header_length = current_length;
 
-                // Allocate space and copy data for lowest header frame
                 if (lowest_header_data == NULL)
                 {
                     lowest_header_data = (uint8_t *)heap_caps_malloc(current_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -2514,7 +2591,6 @@ void parse_elm327_response(char *buffer, response_t *response)
                     lowest_header_data = (uint8_t *)heap_caps_realloc(lowest_header_data, current_length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 }
 
-                // Parse and store the data bytes for this frame
                 int idx = 0;
                 while (*current_data_start != '\0')
                 {
@@ -2530,11 +2606,8 @@ void parse_elm327_response(char *buffer, response_t *response)
                     lowest_header_data[idx++] = (unsigned char)strtol(byte_str, NULL, 16);
                     current_data_start += 2;
                 }
-                ESP_LOGD(TAG, "Stored %d bytes from lowest header frame", idx);
             }
 
-            // Parse data bytes into main response buffer
-            ESP_LOGV(TAG, "Starting data byte parsing at position: %s", data_start);
             while (*data_start != '\0')
             {
                 if (*data_start == ' ')
@@ -2544,13 +2617,11 @@ void parse_elm327_response(char *buffer, response_t *response)
                 }
                 if (strlen(data_start) < 2)
                 {
-                    ESP_LOGW(TAG, "Incomplete byte at end of frame: %s", data_start);
                     break;
                 }
 
                 char byte_str[3] = {data_start[0], data_start[1], 0};
                 response->data[k] = (unsigned char)strtol(byte_str, NULL, 16);
-                ESP_LOGV(TAG, "Parsed byte %d: 0x%02X from %s", k, response->data[k], byte_str);
                 k++;
                 data_start += 2;
             }
@@ -2562,42 +2633,61 @@ void parse_elm327_response(char *buffer, response_t *response)
         frame = strtok(NULL, "\r\n");
     }
 
+    // --- ABORT, REJECT, AND BUNDLE HEX FOR UI ---
+    if (sequence_error) {
+        if (original_buffer != NULL) {
+            // Flatten the original buffer (replace newlines with spaces)
+            for(int i = 0; original_buffer[i] != '\0'; i++) {
+                if(original_buffer[i] == '\r' || original_buffer[i] == '\n') {
+                    original_buffer[i] = ' ';
+                }
+            }
+            snprintf((char *)response->data, AUTOPID_BUFFER_SIZE, "error: missing frames [%.1024s]", original_buffer);
+        } else {
+            snprintf((char *)response->data, AUTOPID_BUFFER_SIZE, "error: missing frames");
+        }
+        
+        response->length = strlen((char *)response->data);
+        
+        if (lowest_header_data != NULL) {
+            free(lowest_header_data);
+            lowest_header_data = NULL;
+        }
+        response->priority_data = NULL;
+        response->priority_data_len = 0;
+        
+        // FREE THE HEAP POINTER BEFORE RETURNING
+        if (original_buffer != NULL) {
+            free(original_buffer);
+        }
+        return;
+    }
+    // --------------------------------------------
+
+    // Clean up heap pointer if parsing succeeded
+    if (original_buffer != NULL) {
+        free(original_buffer);
+    }
+
     response->length = k;
 
-    // Set priority data based on frame count and header comparison
     if (frame_count <= 2 || all_headers_same)
+    {
+        response->priority_data = NULL;
+        response->priority_data_len = 0;
+        if (lowest_header_data != NULL)
         {
-            response->priority_data = NULL;
-            response->priority_data_len = 0;
-            if (lowest_header_data != NULL)
-            {
-                free(lowest_header_data);
-                lowest_header_data = NULL;
-            }
-        ESP_LOGI(TAG, "Null priority data set - frames: %d, all headers same: %d",
-                 frame_count, all_headers_same);
+            free(lowest_header_data);
+            lowest_header_data = NULL;
+        }
     }
     else
     {
         response->priority_data = lowest_header_data;
         response->priority_data_len = lowest_header_length;
-
-        if (response->priority_data != NULL && response->priority_data_len > 0)
-        {
-            ESP_LOGI(TAG, "Priority data set - length: %u, starting with byte: 0x%02X",
-                     response->priority_data_len,
-                     response->priority_data[0]);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Priority data set but empty or invalid - length: %u",
-                     response->priority_data_len);
-        }
     }
-
-    ESP_LOGI(TAG, "Parsing complete. Headers - Lowest: 0x%lX, Highest: 0x%lX, Total frames: %d, Total bytes: %lu, Priority data length: %u",
-             lowest_header, highest_header, frame_count, response->length, response->priority_data_len);
 }
+  
 
 static void append_to_buffer(char *buffer, const char *new_data)
 {
@@ -2875,10 +2965,14 @@ void autopid_atma_parser(char *str, uint32_t len, QueueHandle_t *q, char *cmd_st
             {
                 // Process one complete line
                 uint32_t header = 0;
-                response_t rsp;
-                if (autopid_atma_parse_line(autopid_atma_line_buf, autopid_atma_line_pos, &header, &rsp))
+
+		// --- FIXED: Use static heap allocation instead of stack ---
+                static response_t *rsp = NULL;
+                if (!rsp) rsp = heap_caps_malloc(sizeof(response_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+		
+                if (rsp && autopid_atma_parse_line(autopid_atma_line_buf, autopid_atma_line_pos, &header, rsp))
                 {
-                    if (xQueueSend(*q, &rsp, pdMS_TO_TICKS(20)) != pdPASS)
+                    if (xQueueSend(*q, rsp, pdMS_TO_TICKS(20)) != pdPASS)
                     {
                         // Drop if queue is full; monitoring is time-sliced.
                     }
@@ -2952,6 +3046,11 @@ void autopid_parser(char *str, uint32_t len, QueueHandle_t *q, char *cmd_str)
                 if (xQueueSend(autopidQueue, response, pdMS_TO_TICKS(1000)) != pdPASS)
                 {
                     ESP_LOGE(TAG, "Failed to send to queue");
+		    // --- NEW: FREE IF QUEUE FULL ---
+                    if (response->priority_data != NULL) {
+                        free(response->priority_data);
+                        response->priority_data = NULL;
+                    }
                 }
             }
             else
@@ -2959,9 +3058,17 @@ void autopid_parser(char *str, uint32_t len, QueueHandle_t *q, char *cmd_str)
                 sprintf((char *)response->data, "error");
                 response->length = strlen((char *)response->data);
                 ESP_LOGE(TAG, "Error response: %s", auto_pid_buf);
+                // kww HARD FIX: Ensure string buffer is cleared on error frames as well
+                auto_pid_buf[0] = '\0';
+		
                 if (xQueueSend(autopidQueue, response, pdMS_TO_TICKS(1000)) != pdPASS)
                 {
                     ESP_LOGE(TAG, "Failed to send to queue");
+		    // --- NEW: FREE IF QUEUE FULL ---
+                    if (response->priority_data != NULL) {
+                        free(response->priority_data);
+                        response->priority_data = NULL;
+                    }
                 }
             }
             // Clear the buffer after parsing
@@ -3049,18 +3156,36 @@ static bool try_parse_protocol_cmd(const char *cmd, int32_t *out_protocol)
 
 static void send_commands(char *commands, uint32_t delay_ms)
 {
-    if (!commands)
-        return;
+    if (!commands) return;
 
     char *cmd_start = commands;
-    char *cmd_end;
-
-    while ((cmd_end = strchr(cmd_start, '\r')) != NULL)
+    
+    // Loop until we reach the end of the string
+    while (*cmd_start != '\0')
     {
-        size_t cmd_len = cmd_end - cmd_start + 1; // +1 to include '\r'
-        char str_send[cmd_len + 1];               // +1 for null terminator
+        // Skip leading spaces, \r, \n, or semicolons
+        while (*cmd_start == ' ' || *cmd_start == '\r' || *cmd_start == '\n' || *cmd_start == ';') {
+            cmd_start++;
+        }
+        if (*cmd_start == '\0') break;
+
+        // Find the end of this command (marked by \r, \n, ;, or end of string)
+        char *cmd_end = cmd_start;
+        while (*cmd_end != '\0' && *cmd_end != '\r' && *cmd_end != '\n' && *cmd_end != ';') {
+            cmd_end++;
+        }
+
+        size_t cmd_len = cmd_end - cmd_start;
+        if (cmd_len == 0) {
+            cmd_start = cmd_end;
+            continue;
+        }
+
+        // Create a temporary buffer for the command and explicitly append \r
+        char str_send[cmd_len + 2]; 
         strncpy(str_send, cmd_start, cmd_len);
-        str_send[cmd_len] = '\0'; // Null-terminate the command string
+        str_send[cmd_len] = '\r';   // ELM327 requires \r
+        str_send[cmd_len + 1] = '\0'; 
 
         // Keep protocol tracking in sync if init strings switch protocol.
         int32_t new_protocol_number = -1;
@@ -3071,13 +3196,10 @@ static void send_commands(char *commands, uint32_t delay_ms)
             if (autopid_get_protocol_number(&current_protocol_number) == ESP_OK &&
                 current_protocol_number == new_protocol_number)
             {
-                // Already in the requested protocol; avoid re-sending the command.
-                // skip_send = true; // Commented out to ensure command reaches ELM for safety
                 skip_send = false;
             }
             else
             {
-                // Update tracking early so downstream logic (header length etc.) stays consistent.
                 autopid_set_protocol_number(new_protocol_number);
             }
         }
@@ -3088,20 +3210,19 @@ static void send_commands(char *commands, uint32_t delay_ms)
             (strstr(str_send, "ate1") == NULL && strstr(str_send, "ATE1") == NULL && strstr(str_send, "at e1") == NULL && strstr(str_send, "AT E1") == NULL))
         {
 #if HARDWARE_VER == WICAN_PRO
-            // elm327_process_cmd((uint8_t *)str_send, cmd_len, &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser);
-            elm327_run_command((char *)str_send, cmd_len, 1000, &autopidQueue, NULL, false, 0);
+            // RESTORED: Use the stable elm327_process_cmd. 
+            // elm327_run_command causes FreeRTOS spinlock panics due to pointer mismatch.
+            elm327_process_cmd((uint8_t *)str_send, cmd_len + 1, &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser);
 #else
             twai_message_t tx_msg;
-            elm327_process_cmd((uint8_t *)str_send, cmd_len, &tx_msg, &autopidQueue);
+            elm327_process_cmd((uint8_t *)str_send, cmd_len + 1, &tx_msg, &autopidQueue);
 #endif
         }
 
-        cmd_start = cmd_end + 1; // Move to the start of the next command
+        cmd_start = cmd_end; 
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 }
-
-//////////////////
 
 
 
@@ -3109,6 +3230,16 @@ char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len, bool is_d
 
     if (!data || data_len == 0) return NULL;
 
+    // --- NEW: SMUGGLE OUR CUSTOM ERROR STRING THROUGH ---
+    if (strstr((char *)data, "error: missing frames") != NULL) {
+        char *error_str = heap_caps_malloc(data_len + 1, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+        if (error_str) {
+            strncpy(error_str, (char *)data, data_len);
+            error_str[data_len] = '\0';
+            return error_str;
+        }
+    }
+    // ----------------------------------------------------
     
     // 1. If user explicitly requested DTC_RAW, run the formatting
     if (is_dtc) {
@@ -3199,6 +3330,27 @@ char* autopid_process_raw_expression(uint8_t *data, uint32_t data_len, bool is_d
 static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
     if (!curr_pid || curr_pid->cmd == NULL || strlen(curr_pid->cmd) == 0) return;
 
+    // --- FIXED: Allocate response on PSRAM Heap, not Stack ---
+    response_t *elm327_response = heap_caps_malloc(sizeof(response_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!elm327_response) return;
+
+    // Flush Queue using our heap pointer
+    while (xQueueReceive(autopidQueue, elm327_response, 0) == pdPASS) {
+        if (elm327_response->priority_data != NULL) {
+            free(elm327_response->priority_data);
+        }
+    }
+
+    // HARD FIX: Flush the residual string accumulation buffers to prevent cross-talk
+    if (auto_pid_buf != NULL) {
+        auto_pid_buf[0] = '\0';
+    } 
+    #if HARDWARE_VER == WICAN_PRO
+    if (elm327_autopid_cmd_buffer != NULL) {
+        elm327_autopid_cmd_buffer[0] = '\0';
+    }
+    #endif
+
     ESP_LOGI(TAG, "Executing command: %s", curr_pid->cmd);
 
     #if HARDWARE_VER == WICAN_PRO
@@ -3208,24 +3360,76 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
     if (elm327_process_cmd((uint8_t *)curr_pid->cmd, strlen(curr_pid->cmd), &tx_msg, &autopidQueue) == ESP_OK)
     #endif
     {
-        response_t elm327_response;
-        memset(&elm327_response, 0, sizeof(elm327_response));
+        memset(elm327_response, 0, sizeof(response_t));
 
-        /* 1. Drop the lock right before we go to sleep waiting for the car */
         xSemaphoreGive(autopid_config->mutex);
-
-        /* 2. Wait for the car */
-        BaseType_t got_response = xQueueReceive(autopidQueue, &elm327_response, pdMS_TO_TICKS(1000));
-
-        /* 3. Instantly re-take the lock */
+        BaseType_t got_response = xQueueReceive(autopidQueue, elm327_response, pdMS_TO_TICKS(1000));
         xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
 
         if (got_response == pdPASS) {
 
-            if (strstr((char *)elm327_response.data, "error") == NULL &&
-                strstr((char *)elm327_response.data, "SEARCHING") == NULL &&
-                strstr((char *)elm327_response.data, "UNABLE TO CONNECT") == NULL) {
-                
+            if (strstr((char *)elm327_response->data, "error") == NULL &&
+                strstr((char *)elm327_response->data, "SEARCHING") == NULL &&
+                strstr((char *)elm327_response->data, "UNABLE TO CONNECT") == NULL) {
+
+
+                    // ====================================================================
+                    // NEW: UNIVERSAL STRUCTURAL DID VALIDATION & ALIGNMENT
+                    // ====================================================================
+                    if (strncmp(curr_pid->cmd, "22", 2) == 0 && strlen(curr_pid->cmd) >= 6) {
+                        
+                        // Extract expected DID safely
+                        char hex1[3] = {curr_pid->cmd[2], curr_pid->cmd[3], '\0'};
+                        char hex2[3] = {curr_pid->cmd[4], curr_pid->cmd[5], '\0'};
+                        
+                        uint8_t exp_b1 = (uint8_t)strtol(hex1, NULL, 16);
+                        uint8_t exp_b2 = (uint8_t)strtol(hex2, NULL, 16);
+
+                        int payload_start = -1;
+
+                        // Scan the first 6 bytes to bypass ISO-TP headers (10 XX) or concatenated NRC stall frames (7F 22 78)
+                        for (int b = 0; b < 6 && b <= elm327_response->length - 3; b++) {
+                            if (elm327_response->data[b] == 0x62 && 
+                                elm327_response->data[b+1] == exp_b1 && 
+                                elm327_response->data[b+2] == exp_b2) {
+                                
+                                // Found the DID! Now look backwards to find the true start of the CAN frame
+                                if (b == 0) {
+                                    payload_start = 0; 
+                                } 
+                                else if (b == 1 && elm327_response->data[0] <= 0x07) {
+                                    payload_start = 0; // Single frame PCI byte is at index 0
+                                }
+                                else if (b >= 1 && elm327_response->data[b-1] <= 0x07) {
+                                    payload_start = b - 1; // Single frame PCI byte
+                                }
+                                else if (b >= 2 && elm327_response->data[b-2] >= 0x10 && elm327_response->data[b-2] <= 0x1F) {
+                                    payload_start = b - 2; // ISO-TP First Frame (10 XX)
+                                } 
+                                else {
+                                    payload_start = b; // Fallback alignment
+                                }
+                                break;
+                            }
+                        }
+
+                        if (payload_start == -1) {
+                            ESP_LOGE(TAG, "CROSSTALK REJECTED: DID %02X%02X not found. Dropping.", exp_b1, exp_b2);
+                            if (elm327_response->priority_data != NULL) free(elm327_response->priority_data);
+                            free(elm327_response);
+                            return; // Drop bad frame silently
+                        }
+
+                        // Shift the array to erase concatenated 7F 22 78 frames, restoring pure payload structure
+                        if (payload_start > 0) {
+                            elm327_response->length -= payload_start;
+                            memmove(elm327_response->data, &elm327_response->data[payload_start], elm327_response->length);
+                            memset(&elm327_response->data[elm327_response->length], 0, AUTOPID_BUFFER_SIZE - elm327_response->length);
+                        }
+                    }
+                    // ====================================================================
+
+	      
                 xEventGroupSetBits(xautopid_event_group, ECU_CONNECTED_BIT);
                 autopid_config->last_successful_pid_time = time(NULL);
 		
@@ -3253,7 +3457,7 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                             }
                             
                             bool is_dtc = (strcasecmp(param->expression, "DTC_RAW") == 0);
-                            param->raw_string_value = autopid_process_raw_expression(elm327_response.data, elm327_response.length, is_dtc);
+                            param->raw_string_value = autopid_process_raw_expression(elm327_response->data, elm327_response->length, is_dtc);
                             
                             if (param->raw_string_value) publish_parameter_mqtt(param);
                             else param->failed = true;
@@ -3261,11 +3465,12 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                         } else {
                             // Standard Math Evaluation
                             double result;
-                            if (evaluate_expression((uint8_t *)param->expression, (uint8_t *)elm327_response.data, 0, &result)) {
+                            if (evaluate_expression((uint8_t *)param->expression, (uint8_t *)elm327_response->data, 0, &result)) {
                                 if (param->min != FLT_MAX && result < param->min) { } 
                                 else if (param->max != FLT_MAX && result > param->max) { } 
                                 else {
                                     param->value = (float)(round(result * 100.0) / 100.0);
+				    autopid_pid_update_hook(param, param->value);
                                     publish_parameter_mqtt(param);
                                 }
                             } else { param->failed = true; }
@@ -3279,13 +3484,14 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                                 const char *param_name = strchr(param->name, '-');
                                 if (param_name && strcmp(param_name + 1, pid_info->params[pi].name) == 0) {
                                     esp_err_t err;
-                                    if (elm327_response.priority_data != NULL) {
-                                        err = extract_signal_value(elm327_response.priority_data, elm327_response.priority_data_len, &pid_info->params[pi], &param->value);
-                                    } else {
-                                        err = extract_signal_value(elm327_response.data, elm327_response.length, &pid_info->params[pi], &param->value);
-                                    }
+                                   if (elm327_response->priority_data != NULL) {
+                                      err = extract_signal_value(elm327_response->priority_data, elm327_response->priority_data_len, &pid_info->params[pi], &param->value);
+                                   } else {
+                                      err = extract_signal_value(elm327_response->data, elm327_response->length, &pid_info->params[pi], &param->value);
+                                   }
                                     if (err == ESP_OK) {
                                         param->value = roundf(param->value * 100.0) / 100.0;
+					autopid_pid_update_hook(param, param->value);
                                         publish_parameter_mqtt(param);
                                     }
                                     break;
@@ -3300,6 +3506,15 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                     parameter_t *param = &curr_pid->parameters[p];
                     if (param->enabled && (!check_timers || wc_timer_is_expired(&param->timer))) {
                         param->failed = true;
+
+                        // buffer fix --- RESTORED FIX: Clear Ghost RPMs and Stale Strings ---
+                        param->value = 0; 
+                        if (param->raw_string_value != NULL) {
+                            free(param->raw_string_value);
+                            param->raw_string_value = NULL;
+                        }
+                        // buffer fix --------------------------------------------------------
+			
                         if (check_timers) wc_timer_set(&param->timer, param->period);
                     }
                 }
@@ -3311,16 +3526,31 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                 parameter_t *param = &curr_pid->parameters[p];
                 if (param->enabled && (!check_timers || wc_timer_is_expired(&param->timer))) {
                     param->failed = true;
+
+                    // buffer fix --- RESTORED FIX: Clear Ghost RPMs and Stale Strings ---
+                    param->value = 0; 
+                    if (param->raw_string_value != NULL) {
+                        free(param->raw_string_value);
+                        param->raw_string_value = NULL;
+                    }
+                    // buffer fix --------------------------------------------------------
+		    
                     if (check_timers) wc_timer_set(&param->timer, param->period);
                 }
             }
             ESP_LOGE(TAG, "Queue Timeout for %s", curr_pid->cmd);
         }
+        // --- NEW: PLUG THE MEMORY LEAK ---
+        if (elm327_response->priority_data != NULL) {
+          free(elm327_response->priority_data);
+        }
     } else {
         ESP_LOGE(TAG, "Process Cmd Failed: %s", curr_pid->cmd);
     }
+    
+    // FREE THE HEAP POINTER!
+    free(elm327_response);
 }
-
 		     
 static bool autopid_should_pause_pid_polling(float *out_voltage, const char **out_reason)
 {
@@ -4123,7 +4353,9 @@ static void autopid_task(void *pvParameters)
 {
     static char default_init[] = "ati\rate0\rath1\ratl0\rats1\ratm0\ratst96\r";
     wc_timer_t ecu_check_timer;
-    response_t monitor_rsp;
+    
+    // Change this: response_t monitor_rsp;
+    response_t *monitor_rsp = heap_caps_malloc(sizeof(response_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     ESP_LOGI(TAG, "Autopid Task Started");
@@ -4174,12 +4406,11 @@ static void autopid_task(void *pvParameters)
     ESP_LOGI(TAG, "Total PIDs: %lu", autopid_config->pid_count);
     ESP_LOGI(TAG, "Total CAN Filters: %lu", autopid_config->can_filters_count);
     wc_timer_set(&ecu_check_timer, 2000);
-
+    
     while (1)
     {
         static pid_type_t previous_pid_type = PID_MAX;
         static bool pid_polling_paused_prev = false;
-        static char *current_active_init = NULL; 
 
         dev_status_wait_for_bits(DEV_AUTOPID_ELM327_APP_BIT, portMAX_DELAY);
         
@@ -4193,7 +4424,10 @@ static void autopid_task(void *pvParameters)
             obd_logger_enable();
         }
 
-        if (autopid_config->disable_on_sleep_voltage && !dev_status_is_wake_voltage_ok()) {
+	// --- NEW: BYPASS VOLTAGE PAUSE IF USING PID SLEEP MODE ---
+        if (config_server_get_sleep_config() != 2) {
+	  
+	  if (autopid_config->disable_on_sleep_voltage && !dev_status_is_wake_voltage_ok()) {
             ESP_LOGI(TAG, "Voltage below sleep threshold, pausing autopid until voltage recovers");
             obd_logger_disable();
             dev_status_set_bits(DEV_AUTOPID_IDLE_BIT);
@@ -4201,7 +4435,8 @@ static void autopid_task(void *pvParameters)
             dev_status_clear_bits(DEV_AUTOPID_IDLE_BIT);
             ESP_LOGI(TAG, "Voltage OK, resuming autopid task");
             obd_logger_enable();
-        }
+	  }
+	}
 
         if (!dev_status_is_autopid_enabled()) {
             ESP_LOGI(TAG, "Autopid is disabled, waiting for enable");
@@ -4215,10 +4450,18 @@ static void autopid_task(void *pvParameters)
             vTaskDelay(pdMS_TO_TICKS(100));
         }
 
-        // Optional low-voltage behaviors that only pause PID polling (CAN filters/monitoring stays active).
+
+         // Optional low-voltage behaviors that only pause PID polling...
         float batt_v = NAN;
         const char *pause_reason = NULL;
-        bool pid_polling_paused = autopid_should_pause_pid_polling(&batt_v, &pause_reason);
+        bool pid_polling_paused = false;
+        
+        // --- NEW: BYPASS PAUSE HERE AS WELL ---
+        if (config_server_get_sleep_config() != 2) {
+            pid_polling_paused = autopid_should_pause_pid_polling(&batt_v, &pause_reason);
+        }
+
+	
         if (pid_polling_paused != pid_polling_paused_prev)
         {
             if (pid_polling_paused)
@@ -4241,7 +4484,7 @@ static void autopid_task(void *pvParameters)
                 ESP_LOGI(TAG, "PID polling resumed");
                 // Force init resend on next due PID to avoid stale ELM state.
                 previous_pid_type = PID_MAX;
-                current_active_init = NULL;
+                // not used current_active_init = NULL;
             }
             pid_polling_paused_prev = pid_polling_paused;
         }
@@ -4265,24 +4508,115 @@ static void autopid_task(void *pvParameters)
                     current_group_mqtt_topic = group->mqtt_topic;
 		    
                     bool active = true;
+                    int64_t now_ms = esp_timer_get_time() / 1000;
+
                     if (group->detection_method == DETECTION_VOLTAGE) {
-                        active = dev_status_is_wake_voltage_ok();
+                        float v = 0;
+                        if (sleep_mode_get_voltage(&v) == ESP_OK) {
+                            active = (v >= group->wake_voltage);
+                        } else {
+                            active = false;
+                        }
                     } else if (group->detection_method == DETECTION_ADAPTIVE_RPM) {
                         active = is_engine_running();	
                     } else if (group->detection_method == DETECTION_MQTT) {
                        if (group->mqtt_active_flag) {
-                           // Check if the timer is enabled AND if it has expired
                            if (!group->mqtt_timer_disabled && wc_timer_is_expired(&group->mqtt_active_timer)) {
                                group->mqtt_active_flag = false;
                                active = false;
                                ESP_LOGI(TAG, "Group '%s' MQTT timeout expired. Auto-disabling.", group->name);
-                           } else { 
-                               active = true; 
-                           }
-                       } else { 
-                           active = false; 
-                       }
-                    }    
+                           } else { active = true; }
+                       } else { active = false; }
+
+		       
+                    } else if (group->detection_method == DETECTION_CUSTOM_PID) {
+                        // --- NEW: THE GATEKEEPER LOGIC ---
+                        if (now_ms < group->next_allowed_time_ms) {
+                            active = false; // Still in 3-second cooldown
+                        } else {
+                            // 1. Send Init String
+                            if (group->custom_pid_init && strlen(group->custom_pid_init) > 0) {
+                                send_commands(group->custom_pid_init, 2);
+                            }
+
+// 2. Send PID Mode
+                            if (group->custom_pid_mode && strlen(group->custom_pid_mode) > 0) {
+
+                                // --- FIXED: Allocate Gatekeeper response on Heap ---
+                                response_t *gate_resp = heap_caps_malloc(sizeof(response_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                if (gate_resp) {
+                                    // Flush queue safely
+                                    while (xQueueReceive(autopidQueue, gate_resp, 0) == pdPASS) {
+                                        if (gate_resp->priority_data) free(gate_resp->priority_data);
+                                    }
+                                    
+                                    char gate_cmd[32];
+                                    snprintf(gate_cmd, sizeof(gate_cmd), "%s\r", group->custom_pid_mode);
+                                    
+                                    #if HARDWARE_VER == WICAN_PRO
+                                    if (elm327_process_cmd((uint8_t *)gate_cmd, strlen(gate_cmd), &autopidQueue, elm327_autopid_cmd_buffer, &elm327_autopid_cmd_buffer_len, &elm327_autopid_last_cmd_time, autopid_parser) == ESP_OK)
+                                    #else
+                                    twai_message_t tx_msg;
+                                    if (elm327_process_cmd((uint8_t *)gate_cmd, strlen(gate_cmd), &tx_msg, &autopidQueue) == ESP_OK)
+                                    #endif
+                                    {
+                                        memset(gate_resp, 0, sizeof(response_t));
+                                        
+                                        xSemaphoreGive(autopid_config->mutex);
+                                        BaseType_t got = xQueueReceive(autopidQueue, gate_resp, pdMS_TO_TICKS(500));
+                                        xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);
+                                        
+                                        if (got == pdPASS && strstr((char*)gate_resp->data, "error") == NULL && strstr((char*)gate_resp->data, "NO DATA") == NULL) {
+                                            // 3. Evaluate Expression
+                                            double val = 0;
+                                            char* expr = (group->custom_pid_expr && strlen(group->custom_pid_expr) > 0) ? group->custom_pid_expr : "A";
+                                            
+                                           if (evaluate_expression((uint8_t*)expr, gate_resp->data, 0, &val)) {
+                                            
+                                            // --- RESTORE THIS MISSING LOGIC ---
+                                            bool cond_met = false;
+                                            if (group->custom_pid_operator && strcmp(group->custom_pid_operator, "greater") == 0 && val > group->custom_pid_value) cond_met = true;
+                                            else if (group->custom_pid_operator && strcmp(group->custom_pid_operator, "less") == 0 && val < group->custom_pid_value) cond_met = true;
+                                            else if (group->custom_pid_operator && strcmp(group->custom_pid_operator, "equals") == 0 && val == group->custom_pid_value) cond_met = true;
+                                            // ----------------------------------
+
+                                            if (cond_met) {
+                                                active = true; 
+                                            } else {
+                                                active = false;
+                                                group->next_allowed_time_ms = now_ms + 3000;
+                                            }
+                                        } else {
+                                            active = false;
+                                            group->next_allowed_time_ms = now_ms + 3000;
+                                        }
+                                        
+                                        if (gate_resp->priority_data != NULL) {
+                                            free(gate_resp->priority_data);
+                                        }
+                                     } else {
+                                        active = false;
+                                        group->next_allowed_time_ms = now_ms + 3000;
+                                    }
+                                    
+                                    // FREE THE HEAP POINTER
+                                    free(gate_resp);
+
+                                // --- FIXED: Close the elm327_process_cmd block! ---
+                                } else {
+                                    active = false;
+                                    group->next_allowed_time_ms = now_ms + 3000; // ELM process failed
+                                }
+                                // --------------------------------------------------
+
+                            } else {
+                                active = false; // Malloc failed
+                            }
+                        } else {
+                            active = false; // Missing PID to query
+                        }
+                        }
+                    }
 
                     if (!active) continue;
 
@@ -4302,7 +4636,7 @@ static void autopid_task(void *pvParameters)
                     if (group->init && strlen(group->init) > 0) {
                         /* RESTORED: Simple init send without flush loops */
                         send_commands(group->init, 5);
-                        current_active_init = group->init;
+                        // not used current_active_init = group->init;
                     }
 
                     for (uint32_t i = 0; i < group->pid_count; i++) {
@@ -4396,16 +4730,15 @@ if (any_param_enabled) {
                         if (grp_json) {
                             cJSON_Delete(grp_json);
                         }
-                    }
-
-                }
-		current_group_mqtt_topic = NULL;
-            }
+                    } // Ends: if (group->mqtt_topic ...)
+                } // Ends: for (uint32_t g = ...)
+                current_group_mqtt_topic = NULL;
+		} // Ends: if (autopid_config->use_groups)
 
             // ==========================================================================================
             // [LEGACY] FLAT LIST MODE
             // ==========================================================================================
-	    else if (autopid_config->pid_count > 0) {
+            else if (autopid_config->pid_count > 0) {
 
                 for (uint32_t i = 0; i < autopid_config->pid_count; i++) {
                     pid_data_t *curr_pid = &autopid_config->pids[i];
@@ -4443,7 +4776,7 @@ if (any_param_enabled) {
 		        pids_polled = true;
                         if (curr_pid->pid_type != previous_pid_type) {
                             // FORCE a protocol reset when switching list types
-                            current_active_init = NULL; 
+                            // not used current_active_init = NULL; 
 
                             switch (curr_pid->pid_type) {
                                 case PID_CUSTOM: 
@@ -4476,7 +4809,7 @@ if (any_param_enabled) {
 
         if (autopid_config->can_filters_count > 0 && dev_status_is_autopid_enabled() && !dev_status_is_sleeping())
         {
-            while (xQueueReceive(autopidQueue, &monitor_rsp, 0) == pdPASS);
+            while (xQueueReceive(autopidQueue, monitor_rsp, 0) == pdPASS);
             xSemaphoreTake(autopid_config->mutex, portMAX_DELAY);  
             bool did_monitor = false;
             for (uint32_t fi = 0; fi < autopid_config->can_filters_count; fi++) {
@@ -4499,8 +4832,8 @@ if (any_param_enabled) {
                 send_commands("ATCAF1\r" , 2);
                 did_monitor = true;
 
-                while (xQueueReceive(autopidQueue, &monitor_rsp, 0) == pdPASS) {
-                    process_can_filter_frame(f, &monitor_rsp);
+                while (xQueueReceive(autopidQueue, monitor_rsp, 0) == pdPASS) {
+                    process_can_filter_frame(f, monitor_rsp);
                 }
 	    }
             if (did_monitor) {
@@ -4519,7 +4852,7 @@ if (any_param_enabled) {
                 {
                     xEventGroupClearBits(xautopid_event_group, ECU_CONNECTED_BIT);
                     ESP_LOGW(TAG, "All parameters failed - ECU disconnected");
-		    current_active_init = NULL;
+		    // current_active_init = NULL;
                 }
                 else
                 {

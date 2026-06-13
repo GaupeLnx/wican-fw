@@ -181,6 +181,9 @@ typedef struct _device_config
 	char imu_threshold[16];
 	bool debug_enabled;
         char sta_home_priority[33];
+        char car_on_param[64];
+        char car_on_operator[8];
+        char car_on_value[32];
 }device_config_t;
 
 
@@ -292,3 +295,8 @@ int config_server_get_use_scheduled_wakeups(void);
 const char* config_server_get_timezone(void);
 const char* config_server_get_scheduled_wakeups(void);
 int8_t config_server_get_mqtt_include_timestamp(void);
+
+int8_t config_server_get_sleep_config(void);
+const char *config_server_get_car_on_param(void);
+const char *config_server_get_car_on_operator(void);
+const char *config_server_get_car_on_value(void);
