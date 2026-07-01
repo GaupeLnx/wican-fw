@@ -83,6 +83,18 @@ typedef enum
 	DRIVE_CONNECTION_MAX
 }drive_connection_type_t;
 
+typedef struct {
+	uint8_t threshold;
+	bool wom_x_enabled;
+	bool wom_y_enabled;
+	bool wom_z_enabled;
+	uint8_t accel_odr;
+	uint8_t accel_avg;
+	uint8_t wom_int_dur;
+	uint8_t wom_int_mode;
+	uint8_t wom_ref_mode;
+} config_server_imu_settings_t;
+
 typedef struct _device_config
 {
 	char wifi_mode[65];
@@ -179,6 +191,14 @@ typedef struct _device_config
 	char log_filesystem[16];
 	char log_period[16];
 	char imu_threshold[16];
+	char imu_wom_x[10];
+	char imu_wom_y[10];
+	char imu_wom_z[10];
+	char imu_accel_odr[32];
+	char imu_accel_avg[32];
+	char imu_wom_int_dur[32];
+	char imu_wom_int_mode[32];
+	char imu_wom_ref_mode[32];
 	bool debug_enabled;
         char sta_home_priority[33];
         char car_on_param[64];
@@ -188,6 +208,7 @@ typedef struct _device_config
 
 
 void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, char * did);
+void config_server_preload_config(char *did);
 void config_server_stop(void);
 int8_t config_server_get_wifi_mode(void);
 int8_t config_server_get_ap_ch(void);
@@ -264,6 +285,7 @@ int8_t config_server_get_ap_auto_disable(void);
 int8_t config_server_get_periodic_wakeup(void);
 int8_t config_server_get_wakeup_interval(uint32_t *wakeup_interval);
 int8_t config_server_get_imu_threshold(uint8_t *imu_threshold);
+int8_t config_server_get_imu_settings(config_server_imu_settings_t *settings);
 bool config_server_is_debug_enabled(void);
 bool config_server_get_mqtt_security_enabled(void);
 char *config_server_get_mqtt_cert_set(void);

@@ -745,19 +745,47 @@ void app_main(void)
 	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
 	#endif
 
-	gpio_reset_pin(USB_ID_PIN);
-	gpio_set_direction(USB_ID_PIN, GPIO_MODE_INPUT);
-	gpio_reset_pin(4);
-	gpio_set_direction(4, GPIO_MODE_INPUT);
-	gpio_pullup_dis(4);
-	gpio_pulldown_dis(4);
-	
-	#if HARDWARE_VER == WICAN_PRO
-	uint8_t imu_threshold = 8; // Default value
-	if(config_server_get_imu_threshold(&imu_threshold) != 0) {
-		ESP_LOGW(TAG, "Failed to get IMU threshold from config, using default: %d", imu_threshold);
+		gpio_reset_pin(USB_ID_PIN);
+		gpio_set_direction(USB_ID_PIN, GPIO_MODE_INPUT);
+		gpio_reset_pin(4);
+		gpio_set_direction(4, GPIO_MODE_INPUT);
+		gpio_pullup_dis(4);
+		gpio_pulldown_dis(4);
+
+	    ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	    sprintf((char *)ble_uid,"WiC_%02x%02x%02x%02x%02x%02x",
+	            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+	            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+
+	    sprintf((char *)uid,"%02x%02x%02x%02x%02x%02x",
+	            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+	            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+
+	    sprintf(ap_ssid, "WiCAN_%02x%02x%02x%02x%02x%02x",
+				derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+				derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+
+		restart_tracker_init();
+		config_server_preload_config((char*)&uid[0]);
+
+		#if HARDWARE_VER == WICAN_PRO
+	imu_wom_settings_t imu_settings;
+	config_server_imu_settings_t config_imu_settings;
+	imu_default_wom_settings(&imu_settings);
+	if(config_server_get_imu_settings(&config_imu_settings) == 1) {
+		imu_settings.threshold = config_imu_settings.threshold;
+		imu_settings.wom_x_enabled = config_imu_settings.wom_x_enabled;
+		imu_settings.wom_y_enabled = config_imu_settings.wom_y_enabled;
+		imu_settings.wom_z_enabled = config_imu_settings.wom_z_enabled;
+		imu_settings.accel_odr = (icm42670_accel_odr_t)config_imu_settings.accel_odr;
+		imu_settings.accel_avg = (icm42670_accel_avg_t)config_imu_settings.accel_avg;
+		imu_settings.wom_int_dur = (icm42670_wom_int_dur_t)config_imu_settings.wom_int_dur;
+		imu_settings.wom_int_mode = (icm42670_wom_int_mode_t)config_imu_settings.wom_int_mode;
+		imu_settings.wom_ref_mode = (icm42670_wom_mode_t)config_imu_settings.wom_ref_mode;
+	} else {
+		ESP_LOGW(TAG, "Failed to get IMU settings from config, using defaults");
 	}
-	imu_init(I2C_MASTER_NUM, I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, IMU_INT_GPIO_NUM, imu_threshold);
+	imu_init(I2C_MASTER_NUM, I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, IMU_INT_GPIO_NUM, &imu_settings);
 	rtcm_init(I2C_MASTER_NUM);
 	wusb3801_init(I2C_MASTER_NUM);
 	rtcm_sync_system_time_from_rtc();
@@ -765,9 +793,7 @@ void app_main(void)
 	// rtcm_set_date(0x24, 0x12, 0x27, 0x06);  // 2024-01-20 Saturday(6) in BCD	
 	#endif
 
-	restart_tracker_init();
-
-	gpio_reset_pin(0);
+		gpio_reset_pin(0);
 	gpio_set_direction(0, GPIO_MODE_INPUT);
 	gpio_reset_pin(USB_OTG_PWR_EN);
 	gpio_set_direction(USB_OTG_PWR_EN, GPIO_MODE_INPUT);
@@ -863,23 +889,10 @@ void app_main(void)
 	#endif
 
 
-	esp_ota_mark_app_valid_cancel_rollback();
+		esp_ota_mark_app_valid_cancel_rollback();
 //    xmsg_obd_rx_queue = xQueueCreate(100, sizeof( twai_message_t) );
 
-    ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
-    sprintf((char *)ble_uid,"WiC_%02x%02x%02x%02x%02x%02x",
-            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
-
-    sprintf((char *)uid,"%02x%02x%02x%02x%02x%02x",
-            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
-
-    sprintf(ap_ssid, "WiCAN_%02x%02x%02x%02x%02x%02x",
-			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
-			
-	#if HARDWARE_VER == WICAN_V300 || HARDWARE_VER == WICAN_USB_V100
+		#if HARDWARE_VER == WICAN_V300 || HARDWARE_VER == WICAN_USB_V100
 		config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, (char*)&uid[0]);
 	#else
 		config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, 0, (char*)&uid[0]);
@@ -1308,4 +1321,3 @@ void app_main(void)
 	
 	cmdline_init();
 }
-

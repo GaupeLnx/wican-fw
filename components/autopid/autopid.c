@@ -50,8 +50,10 @@
 #include <time.h>
 #include "ha_webhooks.h"
 #include "autopid_config.h"
+#include "autopid_pause.h"
 #include "esp_heap_caps.h"
 #include "autopid.h"
+#include "imu.h"
 
 // #define TAG __func__
 #define TAG "AUTO_PID"
@@ -93,6 +95,7 @@ static StaticEventGroup_t xautopid_event_group_buffer;
 static autopid_config_t *autopid_config = NULL;
 static autopid_data_t autopid_data = {.json_str = NULL, .mutex = NULL};
 static QueueHandle_t protocolnumberQueue = NULL;
+static volatile bool supply_mode_active = false;
 // Cached configuration JSON (built once after autopid_config is loaded)
 static char *autopid_config_json = NULL;
 static StaticTimer_t autopid_bit_set_timer_buffer;
@@ -127,6 +130,90 @@ static void send_commands(char *commands, uint32_t delay_ms);
 static void publish_parameter_mqtt(parameter_t *param);
 static void autopid_data_update(autopid_config_t *pids);
 static void autopid_processing_task(void *pvParameters);
+
+static const char *autopid_imu_activity_state_str(void)
+{
+    switch (imu_get_activity_state())
+    {
+    case ACTIVITY_STATE_ACTIVE:
+        return "active";
+    case ACTIVITY_STATE_STATIONARY:
+        return "stationary";
+    case ACTIVITY_STATE_INVALID:
+    default:
+        return "invalid";
+    }
+}
+
+static char *autopid_build_debug_payload(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root)
+    {
+        return NULL;
+    }
+
+    float imu_x = 0.0f;
+    float imu_y = 0.0f;
+    float imu_z = 0.0f;
+    float battery_voltage = 0.0f;
+    uint8_t imu_status2 = 0;
+    char trigger[32] = {0};
+    const char *activity = autopid_imu_activity_state_str();
+
+    if (strcmp(activity, "active") == 0)
+    {
+        imu_status2 = imu_get_last_int_status2();
+    }
+
+    cJSON_AddStringToObject(root, "imu_activity", activity);
+    cJSON_AddBoolToObject(root, "imu_active", strcmp(activity, "active") == 0);
+    cJSON_AddNumberToObject(root, "imu_int_status2", imu_status2);
+    cJSON_AddBoolToObject(root, "imu_trigger_smd", (imu_status2 & ICM42670_SMD_INT_BITS) != 0);
+    cJSON_AddBoolToObject(root, "imu_trigger_x", (imu_status2 & ICM42670_WOM_X_INT_BITS) != 0);
+    cJSON_AddBoolToObject(root, "imu_trigger_y", (imu_status2 & ICM42670_WOM_Y_INT_BITS) != 0);
+    cJSON_AddBoolToObject(root, "imu_trigger_z", (imu_status2 & ICM42670_WOM_Z_INT_BITS) != 0);
+    cJSON_AddNumberToObject(root, "imu_trigger_x_count", imu_get_wom_x_count());
+    cJSON_AddNumberToObject(root, "imu_trigger_y_count", imu_get_wom_y_count());
+    cJSON_AddNumberToObject(root, "imu_trigger_z_count", imu_get_wom_z_count());
+    cJSON_AddNumberToObject(root, "imu_last_active_ms", imu_get_last_active_ms());
+
+    if (imu_status2 & ICM42670_SMD_INT_BITS)
+        strlcat(trigger, "smd", sizeof(trigger));
+    if (imu_status2 & ICM42670_WOM_X_INT_BITS)
+        strlcat(trigger, trigger[0] ? ",x" : "x", sizeof(trigger));
+    if (imu_status2 & ICM42670_WOM_Y_INT_BITS)
+        strlcat(trigger, trigger[0] ? ",y" : "y", sizeof(trigger));
+    if (imu_status2 & ICM42670_WOM_Z_INT_BITS)
+        strlcat(trigger, trigger[0] ? ",z" : "z", sizeof(trigger));
+    cJSON_AddStringToObject(root, "imu_trigger", trigger[0] ? trigger : "none");
+
+    if (imu_read_accel(&imu_x, &imu_y, &imu_z) == ESP_OK)
+    {
+        cJSON_AddNumberToObject(root, "imu_accel_x", imu_x);
+        cJSON_AddNumberToObject(root, "imu_accel_y", imu_y);
+        cJSON_AddNumberToObject(root, "imu_accel_z", imu_z);
+    }
+
+    if (sleep_mode_get_voltage(&battery_voltage) == ESP_OK)
+    {
+        cJSON_AddNumberToObject(root, "battery_voltage", battery_voltage);
+    }
+
+    autopid_pause_pid_polling_state_t polling_state = autopid_pause_get_pid_polling_state();
+    cJSON_AddBoolToObject(root, "pid_polling_paused", polling_state.paused);
+    cJSON_AddStringToObject(root, "pause_reason",
+                            polling_state.reason ? polling_state.reason : "none");
+
+    if (config_server_get_mqtt_include_timestamp() == 1)
+    {
+        cJSON_AddNumberToObject(root, "timestamp", (double)time(NULL));
+    }
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return payload;
+}
 
 static volatile int32_t s_last_car_on_valid_stamp = -1;
 
@@ -252,6 +339,62 @@ static bool autopid_prepare_parameter_value(parameter_t *param,
     *out_value = (float)rounded_value;
     return true;
 }
+
+static bool autopid_supply_mode_compare_value(double actual, const char *op, double expected)
+{
+    if (!op)
+        return false;
+
+    if (strcmp(op, "=") == 0 || strcmp(op, "==") == 0)
+        return fabs(actual - expected) < 0.00001;
+    if (strcmp(op, "<") == 0)
+        return actual < expected;
+    if (strcmp(op, ">") == 0)
+        return actual > expected;
+    if (strcmp(op, ">=") == 0)
+        return actual >= expected;
+    if (strcmp(op, "<=") == 0)
+        return actual <= expected;
+    if (strcmp(op, "!=") == 0)
+        return fabs(actual - expected) >= 0.00001;
+
+    return false;
+}
+
+static void autopid_update_supply_mode_state_from_param(const parameter_t *param)
+{
+    if (!param ||
+        !param->name ||
+        !autopid_config ||
+        !autopid_config->supply_mode_enabled ||
+        !autopid_config->supply_mode_pid_name ||
+        autopid_config->supply_mode_pid_name[0] == '\0' ||
+        autopid_config->supply_mode_operator[0] == '\0' ||
+        strcmp(param->name, autopid_config->supply_mode_pid_name) != 0 ||
+        !isfinite((double)param->value))
+    {
+        return;
+    }
+
+    supply_mode_active = autopid_supply_mode_compare_value((double)param->value,
+                                                           autopid_config->supply_mode_operator,
+                                                           (double)autopid_config->supply_mode_value);
+}
+
+bool autopid_supply_mode_is_active(void)
+{
+    if (!autopid_config ||
+        !autopid_config->supply_mode_enabled ||
+        !autopid_config->supply_mode_pid_name ||
+        autopid_config->supply_mode_pid_name[0] == '\0' ||
+        autopid_config->supply_mode_operator[0] == '\0')
+    {
+        return false;
+    }
+
+    return supply_mode_active;
+}
+
 // strdup_psram
 static char *strdup_psram(const char *s)
 {
@@ -1102,6 +1245,8 @@ static const char *dest_type_str(destination_type_t t)
         return "MQTT_Topic";
     case DEST_MQTT_WALLBOX:
         return "MQTT_WallBox";
+    case DEST_MQTT_DEBUG:
+        return "MQTT_Debug";
     case DEST_HTTP:
         return "HTTP";
     case DEST_HTTPS:
@@ -1318,16 +1463,16 @@ void autopid_publish_all_destinations(bool is_event_trigger)
         return; // grouping disabled
     }
 
-    // Get snapshot JSON (caller must free)
+    // Get the regular AutoPID snapshot. MQTT Debug can still publish if no
+    // regular PID snapshot is available.
     char *raw_json = autopid_data_read();
     if (!raw_json)
     {
-        ESP_LOGW(TAG, "No autopid data to publish");
-        return;
+        ESP_LOGW(TAG, "No regular autopid data to publish");
     }
 
     // Inject timestamp into snapshot JSON (only if enabled!)
-    if (config_server_get_mqtt_include_timestamp() == 1)
+    if (raw_json && config_server_get_mqtt_include_timestamp() == 1)
     {
         cJSON *ts_root = cJSON_Parse(raw_json);
         if (ts_root)
@@ -1343,11 +1488,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
         }
     }
 
-    // Final safety check to prevent str_len exceptions if payload building failed
-    if (!raw_json) {
-        ESP_LOGE(TAG, "Failed to build JSON payload, skipping destination publish");
-        return;
-    }
+    char *debug_json = NULL;
 
     // Current time not directly needed with wc_timer; timers store absolute expiry in us
 
@@ -1401,8 +1542,47 @@ void autopid_publish_all_destinations(bool is_event_trigger)
         // ----------------------------------
 
         const char *dest = gd->destination ? gd->destination : "";
+
+        if (gd->type != DEST_MQTT_DEBUG && !raw_json)
+        {
+            gd->fail_count++;
+            ESP_LOGW(TAG, "Destination %u skipped: no regular AutoPID payload", (unsigned int)i);
+            if (effective_cycle > 0)
+            {
+                wc_timer_set(&gd->publish_timer, effective_cycle);
+            }
+            else
+            {
+                gd->publish_timer = 0;
+            }
+            continue;
+        }
+
         switch (gd->type)
         {
+        case DEST_MQTT_DEBUG:
+        {
+            bool can_publish = (config_server_mqtt_en_config() == 1) && (mqtt_connected() != 0);
+            const char *topic = (dest[0] != '\0') ? dest : config_server_get_mqtt_rx_topic();
+
+            if (!debug_json)
+            {
+                debug_json = autopid_build_debug_payload();
+            }
+
+            if (can_publish && debug_json)
+            {
+                mqtt_publish(topic, debug_json, 0, 0, 1);
+                gd->success_count++;
+                ESP_LOGI(TAG, "Published MQTT Debug to %s", topic);
+            }
+            else
+            {
+                gd->fail_count++;
+                ESP_LOGW(TAG, "MQTT Debug publish skipped (not connected/disabled or payload failed) to %s", topic);
+            }
+            break;
+        }
         case DEST_MQTT_TOPIC:
         case DEST_DEFAULT: // treat as MQTT default topic
         {
@@ -2076,6 +2256,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
     heap_caps_check_integrity_all(true);
 #endif
 
+    free(debug_json);
     free(raw_json);
 }
 
@@ -2163,6 +2344,29 @@ char *autopid_get_config(void)
                 ESP_LOGE(TAG, "Failed to create JSON object");
                 xSemaphoreGive(autopid_config->mutex);
                 return NULL;
+            }
+
+            cJSON_AddStringToObject(root, "supply_mode_enabled",
+                                    autopid_config->supply_mode_enabled ? "enable" : "disable");
+            cJSON_AddNumberToObject(root, "boot_pid_polling_keep_alive_seconds",
+                                    autopid_config->boot_pid_polling_keep_alive_seconds);
+            cJSON_AddStringToObject(root, "voltage_rise_wakeup",
+                                    autopid_config->voltage_rise_wakeup_enabled ? "enable" : "disable");
+            cJSON_AddNumberToObject(root, "voltage_rise_threshold", autopid_config->voltage_rise_threshold);
+            cJSON_AddNumberToObject(root, "voltage_rise_time_seconds", autopid_config->voltage_rise_time_seconds);
+            cJSON_AddStringToObject(root, "imu_voltage_override",
+                                    autopid_config->imu_voltage_override_enabled ? "enable" : "disable");
+            if (autopid_config->supply_mode_pid_name && autopid_config->supply_mode_pid_name[0] != '\0')
+            {
+                cJSON_AddStringToObject(root, "supply_mode_pid_name", autopid_config->supply_mode_pid_name);
+            }
+            if (autopid_config->supply_mode_operator[0] != '\0')
+            {
+                cJSON_AddStringToObject(root, "supply_mode_operator", autopid_config->supply_mode_operator);
+            }
+            if (autopid_config->supply_mode_enabled)
+            {
+                cJSON_AddNumberToObject(root, "supply_mode_value", autopid_config->supply_mode_value);
             }
 
             // 1. Export Groups (Primary Data Source for New UI)
@@ -2413,6 +2617,7 @@ static void process_can_filter_frame(can_filter_t *f, const response_t *rsp)
                 ESP_LOGI(TAG, "CANFLT 0x%lX param=%s result=%.2f", (unsigned long)f->frame_id,
                          param->name ? param->name : "(null)", (double)param->value);
 		autopid_pid_update_hook(param, param->value);
+                autopid_update_supply_mode_state_from_param(param);
                 publish_parameter_mqtt(param);
             }
         }
@@ -3471,6 +3676,7 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                                 else {
                                     param->value = (float)(round(result * 100.0) / 100.0);
 				    autopid_pid_update_hook(param, param->value);
+                                    autopid_update_supply_mode_state_from_param(param);
                                     publish_parameter_mqtt(param);
                                 }
                             } else { param->failed = true; }
@@ -3492,6 +3698,7 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
                                     if (err == ESP_OK) {
                                         param->value = roundf(param->value * 100.0) / 100.0;
 					autopid_pid_update_hook(param, param->value);
+                                        autopid_update_supply_mode_state_from_param(param);
                                         publish_parameter_mqtt(param);
                                     }
                                     break;
@@ -3552,45 +3759,6 @@ static void execute_pid(pid_data_t *curr_pid, bool check_timers) {
     free(elm327_response);
 }
 		     
-static bool autopid_should_pause_pid_polling(float *out_voltage, const char **out_reason)
-{
-    if (out_voltage)
-        *out_voltage = NAN;
-    if (out_reason)
-        *out_reason = NULL;
-
-    if (!autopid_config)
-        return false;
-
-    // Mode: disable PID requests when below Power Saving -> Sleep Voltage threshold.
-    // Uses dev_status voltage bit (set by sleep_mode task).
-    if (autopid_config->disable_pid_requests_on_sleep_voltage && !dev_status_is_wake_voltage_ok())
-    {
-        if (out_reason)
-            *out_reason = "sleep_voltage";
-        return true;
-    }
-
-    // Mode: disable PID requests when below a custom Automate threshold.
-    if (autopid_config->disable_pid_requests_on_automate_threshold)
-    {
-        float v = 0.0f;
-        if (sleep_mode_get_voltage(&v) == ESP_OK)
-        {
-            if (out_voltage)
-                *out_voltage = v;
-            if (v < autopid_config->pid_polling_min_voltage)
-            {
-                if (out_reason)
-                    *out_reason = "automate_threshold";
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
 static bool all_parameters_failed(autopid_config_t *autopid_config)
 {
     if (!autopid_config)
@@ -4458,7 +4626,7 @@ static void autopid_task(void *pvParameters)
         
         // --- NEW: BYPASS PAUSE HERE AS WELL ---
         if (config_server_get_sleep_config() != 2) {
-            pid_polling_paused = autopid_should_pause_pid_polling(&batt_v, &pause_reason);
+            pid_polling_paused = autopid_pause_should_pause_pid_polling(autopid_config, &batt_v, &pause_reason);
         }
 
 	
@@ -4868,6 +5036,10 @@ if (any_param_enabled) {
         {
             vTaskDelay(pdMS_TO_TICKS(20));
         }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
     }
 }
 
@@ -5087,7 +5259,7 @@ static void autopid_processing_task(void *pvParameters) {
 
         // Try to take the lock, but don't hang the whole system if sampler is busy
         if (autopid_lock(500)) { 
-            autopid_data_update(autopid_config); // Build JSON
+            //autopid_data_update(autopid_config); // Build JSON
             
             // <--- UNLOCK EARLY! Don't hold the car polling hostage during slow HTTP posts.
             autopid_unlock(); 
