@@ -5236,7 +5236,7 @@ void autopid_init(char *id, bool enable_logging, uint32_t logging_period)
     }
     
     ha_webhooks_init();
-    if (config_server_get_webhook_en()) {
+    if (false && config_server_get_webhook_en()) {
         static StackType_t *autopid_webhook_task_stack;
         static StaticTask_t autopid_webhook_task_buffer;
         static const size_t autopid_webhook_task_stack_depth = (1024 * 20);
@@ -5271,7 +5271,7 @@ static void autopid_processing_task(void *pvParameters) {
 
         // Try to take the lock, but don't hang the whole system if sampler is busy
         if (autopid_lock(500)) { 
-            //autopid_data_update(autopid_config); // Build JSON
+            autopid_data_update(autopid_config); // Build JSON
             
             // <--- UNLOCK EARLY! Don't hold the car polling hostage during slow HTTP posts.
             autopid_unlock(); 
