@@ -1,6 +1,11 @@
 #include <string.h>
+#include <stdarg.h>
+#include <stdatomic.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"       
 #include "driver/sdmmc_host.h"
@@ -14,8 +19,15 @@
 #include "dev_status.h"
 #include "filesystem.h"
 #include "restart_tracker.h"
+#include "esp_log.h"
 
 #define OTA_BUFFER_SIZE 4096  
+#define SDCARD_LOG_PATH SD_CARD_MOUNT_POINT "/wican.log"
+#define SDCARD_LOG_BACKUP_PATH SD_CARD_MOUNT_POINT "/wican.log.1"
+#define SDCARD_LOG_MAX_FILE_SIZE (1024 * 1024)
+#define SDCARD_LOG_LINE_SIZE 1024
+#define SDCARD_LOG_QUEUE_LENGTH 16
+#define SDCARD_LOG_STOP_INDEX UINT8_MAX
 
 static const char *TAG = "SDCARD";
 #ifdef USE_SD_FATFS
@@ -24,6 +36,278 @@ static sdmmc_card_t *s_card = NULL;
 static sdmmc_card_t sdcard;
 #endif
 static bool s_card_mounted = false;
+
+typedef struct
+{
+    uint16_t len;
+    char text[SDCARD_LOG_LINE_SIZE];
+} sdcard_log_entry_t;
+
+static QueueHandle_t s_log_free_queue = NULL;
+static QueueHandle_t s_log_pending_queue = NULL;
+static sdcard_log_entry_t *s_log_entries = NULL;
+static int (*s_previous_log_vprintf)(const char *format, va_list args) = NULL;
+static atomic_bool s_log_enabled = false;
+static atomic_bool s_log_task_running = false;
+static atomic_uint s_log_callbacks_active = 0;
+static atomic_uint s_log_dropped = 0;
+
+static size_t sdcard_log_strip_ansi(char *output, size_t output_size,
+                                   const char *input, size_t input_size)
+{
+    size_t output_len = 0;
+
+    for (size_t i = 0; i < input_size && output_len + 1 < output_size; i++)
+    {
+        if ((unsigned char)input[i] == 0x1b && i + 1 < input_size && input[i + 1] == '[')
+        {
+            i += 2;
+            while (i < input_size)
+            {
+                unsigned char c = (unsigned char)input[i];
+                if (c >= 0x40 && c <= 0x7e)
+                {
+                    break;
+                }
+                i++;
+            }
+            continue;
+        }
+
+        output[output_len++] = input[i];
+    }
+
+    output[output_len] = '\0';
+    return output_len;
+}
+
+static FILE *sdcard_log_open(void)
+{
+    FILE *file = fopen(SDCARD_LOG_PATH, "a");
+    if (file == NULL)
+    {
+        return NULL;
+    }
+
+    if (fseek(file, 0, SEEK_END) == 0 && ftell(file) >= SDCARD_LOG_MAX_FILE_SIZE)
+    {
+        fclose(file);
+        unlink(SDCARD_LOG_BACKUP_PATH);
+        rename(SDCARD_LOG_PATH, SDCARD_LOG_BACKUP_PATH);
+        file = fopen(SDCARD_LOG_PATH, "w");
+    }
+
+    return file;
+}
+
+static void sdcard_log_task(void *arg)
+{
+    (void)arg;
+    uint8_t index;
+    bool stop_requested = false;
+    char clean_line[SDCARD_LOG_LINE_SIZE];
+
+    while (!stop_requested &&
+           xQueueReceive(s_log_pending_queue, &index, portMAX_DELAY) == pdTRUE)
+    {
+        if (index == SDCARD_LOG_STOP_INDEX)
+        {
+            break;
+        }
+
+        FILE *file = sdcard_log_open();
+
+        do
+        {
+            if (index == SDCARD_LOG_STOP_INDEX)
+            {
+                stop_requested = true;
+                break;
+            }
+
+            if (index < SDCARD_LOG_QUEUE_LENGTH)
+            {
+                sdcard_log_entry_t *entry = &s_log_entries[index];
+                if (file != NULL)
+                {
+                    size_t clean_len = sdcard_log_strip_ansi(
+                        clean_line, sizeof(clean_line), entry->text, entry->len);
+                    fwrite(clean_line, 1, clean_len, file);
+                }
+                (void)xQueueSend(s_log_free_queue, &index, portMAX_DELAY);
+            }
+        }
+        while (xQueueReceive(s_log_pending_queue, &index, 0) == pdTRUE);
+
+        if (file != NULL)
+        {
+            unsigned int dropped = atomic_exchange(&s_log_dropped, 0);
+            if (dropped > 0)
+            {
+                fprintf(file, "W (SDCARD): Dropped %u SD log lines because the queue was full\n",
+                        dropped);
+            }
+            fflush(file);
+            fsync(fileno(file));
+            fclose(file);
+        }
+    }
+
+    atomic_store(&s_log_task_running, false);
+    vTaskDelete(NULL);
+}
+
+static int sdcard_log_vprintf(const char *format, va_list args)
+{
+    va_list console_args;
+    va_copy(console_args, args);
+    int result = s_previous_log_vprintf != NULL
+        ? s_previous_log_vprintf(format, console_args)
+        : vprintf(format, console_args);
+    va_end(console_args);
+
+    atomic_fetch_add(&s_log_callbacks_active, 1);
+
+    if (atomic_load(&s_log_enabled) && !xPortInIsrContext() &&
+        s_log_free_queue != NULL && s_log_pending_queue != NULL && s_log_entries != NULL)
+    {
+        uint8_t index;
+        if (xQueueReceive(s_log_free_queue, &index, 0) == pdTRUE)
+        {
+            sdcard_log_entry_t *entry = &s_log_entries[index];
+            va_list file_args;
+            va_copy(file_args, args);
+            int length = vsnprintf(entry->text, sizeof(entry->text), format, file_args);
+            va_end(file_args);
+
+            if (length < 0)
+            {
+                (void)xQueueSend(s_log_free_queue, &index, 0);
+            }
+            else
+            {
+                entry->len = (uint16_t)(
+                    length < (int)sizeof(entry->text) ? length : sizeof(entry->text) - 1);
+                if (xQueueSend(s_log_pending_queue, &index, 0) != pdTRUE)
+                {
+                    (void)xQueueSend(s_log_free_queue, &index, 0);
+                    atomic_fetch_add(&s_log_dropped, 1);
+                }
+            }
+        }
+        else
+        {
+            atomic_fetch_add(&s_log_dropped, 1);
+        }
+    }
+
+    atomic_fetch_sub(&s_log_callbacks_active, 1);
+    return result;
+}
+
+static esp_err_t sdcard_log_start(void)
+{
+    if (atomic_load(&s_log_enabled))
+    {
+        return ESP_OK;
+    }
+
+    s_log_entries = heap_caps_calloc(
+        SDCARD_LOG_QUEUE_LENGTH, sizeof(sdcard_log_entry_t),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_log_free_queue = xQueueCreate(SDCARD_LOG_QUEUE_LENGTH, sizeof(uint8_t));
+    s_log_pending_queue = xQueueCreate(SDCARD_LOG_QUEUE_LENGTH + 1, sizeof(uint8_t));
+
+    if (s_log_entries == NULL || s_log_free_queue == NULL || s_log_pending_queue == NULL)
+    {
+        goto cleanup;
+    }
+
+    for (uint8_t i = 0; i < SDCARD_LOG_QUEUE_LENGTH; i++)
+    {
+        if (xQueueSend(s_log_free_queue, &i, 0) != pdTRUE)
+        {
+            goto cleanup;
+        }
+    }
+
+    atomic_store(&s_log_task_running, true);
+    if (xTaskCreate(sdcard_log_task, "sd_log", 4096, NULL, 2, NULL) != pdPASS)
+    {
+        atomic_store(&s_log_task_running, false);
+        goto cleanup;
+    }
+
+    atomic_store(&s_log_dropped, 0);
+    atomic_store(&s_log_enabled, true);
+    s_previous_log_vprintf = esp_log_set_vprintf(sdcard_log_vprintf);
+    return ESP_OK;
+
+cleanup:
+    if (s_log_free_queue != NULL)
+    {
+        vQueueDelete(s_log_free_queue);
+        s_log_free_queue = NULL;
+    }
+    if (s_log_pending_queue != NULL)
+    {
+        vQueueDelete(s_log_pending_queue);
+        s_log_pending_queue = NULL;
+    }
+    if (s_log_entries != NULL)
+    {
+        heap_caps_free(s_log_entries);
+        s_log_entries = NULL;
+    }
+    return ESP_ERR_NO_MEM;
+}
+
+static esp_err_t sdcard_log_stop(void)
+{
+    bool was_enabled = atomic_exchange(&s_log_enabled, false);
+    if (!was_enabled && s_log_free_queue == NULL)
+    {
+        return ESP_OK;
+    }
+
+    if (was_enabled && s_previous_log_vprintf != NULL)
+    {
+        esp_log_set_vprintf(s_previous_log_vprintf);
+    }
+
+    while (atomic_load(&s_log_callbacks_active) != 0)
+    {
+        taskYIELD();
+    }
+
+    if (was_enabled)
+    {
+        uint8_t stop_index = SDCARD_LOG_STOP_INDEX;
+        if (xQueueSend(s_log_pending_queue, &stop_index, pdMS_TO_TICKS(1000)) != pdTRUE)
+        {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
+    TickType_t start = xTaskGetTickCount();
+    while (atomic_load(&s_log_task_running))
+    {
+        if (xTaskGetTickCount() - start > pdMS_TO_TICKS(2000))
+        {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    vQueueDelete(s_log_free_queue);
+    vQueueDelete(s_log_pending_queue);
+    heap_caps_free(s_log_entries);
+    s_log_free_queue = NULL;
+    s_log_pending_queue = NULL;
+    s_log_entries = NULL;
+    s_previous_log_vprintf = NULL;
+    return ESP_OK;
+}
 
 esp_err_t sdcard_perform_ota_update(const char* firmware_path)
 {
@@ -281,6 +565,11 @@ esp_err_t sd_card_init(void)
 
     s_card_mounted = true;
     dev_status_set_bits(DEV_SDCARD_MOUNTED_BIT);
+    esp_err_t log_ret = sdcard_log_start();
+    if (log_ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "SD log capture unavailable: %s", esp_err_to_name(log_ret));
+    }
     ESP_LOGI(TAG, "SD card mounted successfully");
     
     return ESP_OK;
@@ -292,6 +581,13 @@ esp_err_t sd_card_deinit(void)
     {
         ESP_LOGI(TAG, "SD card not mounted");
         return ESP_OK;
+    }
+
+    esp_err_t log_ret = sdcard_log_stop();
+    if (log_ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to stop SD logging: %s", esp_err_to_name(log_ret));
+        return log_ret;
     }
 
     // Unmount partition and disable SDMMC
@@ -312,6 +608,7 @@ esp_err_t sd_card_deinit(void)
     }
     #endif
     s_card_mounted = false;
+    dev_status_clear_bits(DEV_SDCARD_MOUNTED_BIT);
     
     ESP_LOGI(TAG, "SD card unmounted successfully");
     return ESP_OK;
