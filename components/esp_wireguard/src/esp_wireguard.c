@@ -37,6 +37,8 @@
 #include <lwip/err.h>
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_netif.h>
+#include <lwip/netif.h>
 #include <esp_wireguard.h>
 #include <mbedtls/base64.h>
 
@@ -166,7 +168,27 @@ static esp_err_t esp_wireguard_netif_create(const wireguard_config_t *config)
     /* Setup the WireGuard device structure */
     wg.private_key = config->private_key;
     wg.listen_port = config->listen_port;
-    wg.bind_netif = NULL;
+
+    /* Restore v1.06 behavior: pin the WG UDP socket to the underlying WiFi
+     * STA netif. Without this, once the WG netif becomes the default route,
+     * the encrypted tunnel packets themselves are routed back into the WG
+     * netif (encrypt -> route -> encrypt ...), recursing until the TCPIP
+     * thread stack overflows and the device panics. */
+    {
+        struct netif *underlying_netif = NULL;
+        char lwip_netif_name[8] = {0,};
+        if (esp_netif_get_netif_impl_name(
+                esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"),
+                lwip_netif_name) == ESP_OK) {
+            underlying_netif = netif_find(lwip_netif_name);
+        }
+        if (underlying_netif == NULL) {
+            ESP_LOGE(TAG, "cannot resolve WIFI_STA_DEF netif for WireGuard bind");
+            err = ESP_FAIL;
+            goto fail;
+        }
+        wg.bind_netif = underlying_netif;
+    }
 
     ESP_LOGI(TAG, "allowed_ip: %s", config->allowed_ip);
 
@@ -212,7 +234,7 @@ esp_err_t esp_wireguard_init(wireguard_config_t *config, wireguard_ctx_t *ctx)
         goto fail;
     }
 
-    err = 0;
+    err = wireguard_platform_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wireguard_platform_init: %s", esp_err_to_name(err));
         goto fail;
@@ -289,7 +311,7 @@ fail:
         }
         wireguardif_shutdown(wg_netif);
         netif_remove(wg_netif);
-        wireguardif_shutdown(wg_netif);
+        wireguardif_fini(wg_netif);
         wg_netif = NULL;
         memset(&wg_netif_struct, 0, sizeof(wg_netif_struct));
     }
@@ -336,7 +358,7 @@ esp_err_t esp_wireguard_disconnect(wireguard_ctx_t *ctx)
     wg_local_peer_idx = WIREGUARDIF_INVALID_INDEX;
     wireguardif_shutdown(ctx->netif);
     netif_remove(ctx->netif);
-    wireguardif_shutdown(ctx->netif);
+    wireguardif_fini(ctx->netif);
     netif_set_default(ctx->netif_default);
     ctx->netif = NULL;
 
