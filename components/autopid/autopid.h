@@ -60,6 +60,7 @@ typedef enum
     DEST_DEFAULT,
     DEST_MQTT_TOPIC,
     DEST_MQTT_WALLBOX,
+    DEST_MQTT_DEBUG,
     DEST_HTTP,
     DEST_HTTPS,
     DEST_ABRP_API,
@@ -243,6 +244,24 @@ typedef struct
     // Voltage threshold used when disable_pid_requests_on_automate_threshold is enabled.
     // Stored in auto_pid.json as: pid_polling_min_voltage = <number>.
     float pid_polling_min_voltage;
+
+    // Startup grace window: allow PID polling while uptime is below this many seconds.
+    // 0 disables the boot keep-alive.
+    uint32_t boot_pid_polling_keep_alive_seconds;
+
+    // A detected battery-voltage rise temporarily bypasses PID polling pause.
+    bool voltage_rise_wakeup_enabled;
+    float voltage_rise_threshold;
+    uint32_t voltage_rise_time_seconds;
+
+    // Optional PID/value comparison indicating an external 12V supply.
+    bool supply_mode_enabled;
+    char *supply_mode_pid_name;
+    char supply_mode_operator[3];
+    float supply_mode_value;
+
+    // IMU activity overrides low-voltage PID polling pause.
+    bool imu_voltage_override_enabled;
     
     // When enabled, validate that each PID request's response matches the request (service + PID bytes)
     // using the command string (cmd_str) provided by the ELM command runner.
@@ -276,6 +295,7 @@ esp_err_t autopid_find_standard_pid(uint8_t protocol, char *available_pids, uint
 esp_err_t autopid_set_protocol_number(int32_t protocol_value);
 esp_err_t autopid_get_protocol_number(int32_t *protocol_value);
 char *autopid_get_value_by_name(char* name);
+bool autopid_supply_mode_is_active(void);
 void autopid_publish_all_destinations(bool is_event_trigger);
 void autopid_app_reset_timer(void);
 void autopid_set_group_mqtt_state(const char* group_name, bool active_state, uint32_t timeout_mins);

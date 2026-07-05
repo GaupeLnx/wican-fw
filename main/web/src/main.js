@@ -2027,6 +2027,7 @@ content.style.cssText='padding:8px 10px;'+(isCollapsed?'display:none;':'display:
             <select class="dest-type" style="width:180px; box-sizing:border-box;">
                 <option value="Default" ${d.type==='Default'?'selected':''}>Default</option>
                 <option value="MQTT_Topic" ${d.type==='MQTT_Topic'?'selected':''}>MQTT Topic</option>
+                <option value="MQTT_Debug" ${d.type==='MQTT_Debug'?'selected':''}>MQTT Debug</option>
                 <option value="HTTP" ${d.type==='HTTP'?'selected':''}>HTTP POST</option>
                 <option value="HTTPS" ${d.type==='HTTPS'?'selected':''}>HTTPS POST</option>
                 <option value="ABRP_API" ${d.type==='ABRP_API'?'selected':''}>ABRP API</option>
@@ -2287,6 +2288,36 @@ function loadAutoTable(jsonData) {
         setElementValue("grouping", data.grouping, 'disable');
         setElementValue("disable_on_sleep_voltage", data.disable_on_sleep_voltage, 'disable');
         setElementValue("pid_polling_min_voltage", data.pid_polling_min_voltage, '13.1');
+        setElementValue("boot_pid_polling_keep_alive_seconds",
+            (data.boot_pid_polling_keep_alive_seconds !== undefined && data.boot_pid_polling_keep_alive_seconds !== null)
+                ? data.boot_pid_polling_keep_alive_seconds
+                : '30',
+            '30');
+        const supplyModeSelectedPid = (data.supply_mode_enabled === 'enable' || data.supply_mode_enabled === true)
+            ? (data.supply_mode_pid_name || '')
+            : '';
+        populateSupplyModePidSelect(data, supplyModeSelectedPid);
+        setElementValue("supply_mode_operator", data.supply_mode_operator, '');
+        const supplyModeValueEl = document.getElementById("supply_mode_value");
+        if (supplyModeValueEl) {
+            supplyModeValueEl.value = (data.supply_mode_value !== undefined && data.supply_mode_value !== null)
+                ? data.supply_mode_value
+                : '';
+        }
+        toggleSupplyModeSection();
+        setElementValue("voltage_rise_wakeup",
+            (data.voltage_rise_wakeup === undefined || data.voltage_rise_wakeup === null || data.voltage_rise_wakeup === 'enable' || data.voltage_rise_wakeup === true) ? 'enable' : 'disable',
+            'enable');
+        setElementValue("voltage_rise_threshold",
+            (data.voltage_rise_threshold !== undefined && data.voltage_rise_threshold !== null) ? data.voltage_rise_threshold : '0.2',
+            '0.2');
+        setElementValue("voltage_rise_time_seconds",
+            (data.voltage_rise_time_seconds !== undefined && data.voltage_rise_time_seconds !== null) ? data.voltage_rise_time_seconds : '20',
+            '20');
+        toggleVoltageRiseSection();
+        setElementValue("imu_voltage_override",
+            (data.imu_voltage_override === 'enable' || data.imu_voltage_override === true) ? 'enable' : 'disable',
+            'disable');
         const pidMinVoltEl = document.getElementById("pid_polling_min_voltage");
         const pidMinVoltValEl = document.getElementById("pid_polling_min_voltage_value");
         if (pidMinVoltEl && pidMinVoltValEl) pidMinVoltValEl.textContent = pidMinVoltEl.value;
@@ -2464,6 +2495,144 @@ function enableAutoStoreButton() {
     document.getElementById("custom_pid_store").disabled = false;
 }
 
+function collectAutoPidParameterNames(data) {
+    const names = new Set();
+    const addName = (name) => {
+        if (typeof name === 'string' && name.trim().length > 0) {
+            names.add(name.trim());
+        }
+    };
+
+    const visitPid = (pid) => {
+        if (!pid || typeof pid !== 'object') return;
+        addName(pid.name);
+        addName(pid.Name);
+        if (Array.isArray(pid.parameters)) {
+            pid.parameters.forEach((param) => {
+                addName(param?.name);
+                addName(param?.Name);
+            });
+        }
+    };
+
+    const visitFilter = (filter) => {
+        if (!filter || typeof filter !== 'object') return;
+        if (Array.isArray(filter.parameters)) {
+            filter.parameters.forEach((param) => {
+                addName(param?.name);
+                addName(param?.Name);
+            });
+        }
+        if (filter.parameter) {
+            addName(filter.parameter.name);
+            addName(filter.parameter.Name);
+        }
+    };
+
+    const visitCar = (car) => {
+        if (!car || typeof car !== 'object') return;
+        if (Array.isArray(car.pids)) car.pids.forEach(visitPid);
+        if (Array.isArray(car.can_filters)) car.can_filters.forEach(visitFilter);
+        if (Array.isArray(car.pid_groups)) {
+            car.pid_groups.forEach((group) => {
+                if (Array.isArray(group?.pids)) group.pids.forEach(visitPid);
+                if (Array.isArray(group?.can_filters)) group.can_filters.forEach(visitFilter);
+            });
+        }
+    };
+
+    if (Array.isArray(data?.pids)) data.pids.forEach(visitPid);
+    if (Array.isArray(data?.std_pids)) data.std_pids.forEach(visitPid);
+    if (Array.isArray(data?.can_filters)) data.can_filters.forEach(visitFilter);
+    if (Array.isArray(data?.pid_groups)) {
+        data.pid_groups.forEach((group) => {
+            if (Array.isArray(group?.pids)) group.pids.forEach(visitPid);
+            if (Array.isArray(group?.can_filters)) group.can_filters.forEach(visitFilter);
+        });
+    }
+    if (Array.isArray(data?.cars)) data.cars.forEach(visitCar);
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+
+function populateSupplyModePidSelect(data, selectedName) {
+    const select = document.getElementById("supply_mode_pid_name");
+    if (!select) return;
+
+    const selected = selectedName || select.value || "";
+    const names = new Set(collectAutoPidParameterNames(data));
+    if (selected) names.add(selected);
+
+    select.innerHTML = '';
+    const disabledOption = document.createElement('option');
+    disabledOption.value = '';
+    disabledOption.textContent = 'Disabled';
+    select.appendChild(disabledOption);
+
+    Array.from(names)
+        .filter((name) => name && name.trim().length > 0)
+        .sort((a, b) => a.localeCompare(b))
+        .forEach((name) => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+        });
+
+    select.value = selected;
+}
+
+function toggleSupplyModeSection() {
+    const enabled = (document.getElementById("supply_mode_pid_name")?.value || '').trim().length > 0;
+    const compareControls = document.getElementById("supply_mode_compare_controls");
+    const controls = [
+        document.getElementById("supply_mode_operator"),
+        document.getElementById("supply_mode_value")
+    ];
+
+    if (compareControls) compareControls.style.opacity = enabled ? '1' : '0.45';
+    controls.forEach((control) => {
+        if (!control) return;
+        control.disabled = !enabled;
+        control.required = enabled;
+    });
+}
+
+function updateVoltageRiseSuffixes() {
+    const thresholdInput = document.getElementById("voltage_rise_threshold");
+    const thresholdSuffix = document.getElementById("voltage_rise_threshold_suffix");
+    const timeInput = document.getElementById("voltage_rise_time_seconds");
+    const timeSuffix = document.getElementById("voltage_rise_time_seconds_suffix");
+
+    if (thresholdSuffix) {
+        thresholdSuffix.style.display = thresholdInput && String(thresholdInput.value).trim() !== '' ? 'block' : 'none';
+    }
+    if (timeSuffix) {
+        timeSuffix.style.display = timeInput && String(timeInput.value).trim() !== '' ? 'block' : 'none';
+    }
+}
+
+function toggleVoltageRiseSection() {
+    const enabled = document.getElementById("voltage_rise_wakeup")?.value === 'enable';
+    const settingsRow = document.getElementById("voltage_rise_settings_row");
+    const controls = [
+        document.getElementById("voltage_rise_threshold"),
+        document.getElementById("voltage_rise_time_seconds")
+    ];
+
+    if (settingsRow) {
+        settingsRow.style.display = enabled ? '' : 'none';
+    }
+
+    controls.forEach((control) => {
+        if (!control) return;
+        control.disabled = !enabled;
+        control.required = enabled;
+    });
+
+    updateVoltageRiseSuffixes();
+}
+
 
 async function storeAutoTableData() {
     try {
@@ -2476,6 +2645,57 @@ async function storeAutoTableData() {
 
         const groupingValue = document.getElementById("grouping")?.value || 'disable';
         const disableOnSleepVoltageValue = document.getElementById("disable_on_sleep_voltage")?.value || 'automate_threshold';
+        const supplyModePidNameRaw = (document.getElementById("supply_mode_pid_name")?.value || '').trim();
+        const supplyModeEnabled = supplyModePidNameRaw.length > 0;
+        const supplyModeEnabledValue = supplyModeEnabled ? 'enable' : 'disable';
+        const supplyModePidNameValue = supplyModeEnabled ? supplyModePidNameRaw : '';
+        const supplyModeOperatorValue = supplyModeEnabled
+            ? (document.getElementById("supply_mode_operator")?.value || '').trim()
+            : '';
+        const supplyModeCompareValueRaw = document.getElementById("supply_mode_value")?.value;
+        let supplyModeCompareValue = null;
+        if (supplyModeEnabled) {
+            if (!supplyModeOperatorValue) {
+                throw new Error("12V supply comparator is required when supply mode is enabled");
+            }
+            if (supplyModeCompareValueRaw === undefined || String(supplyModeCompareValueRaw).trim() === '') {
+                throw new Error("12V supply trigger value is required when supply mode is enabled");
+            }
+            const supplyModeValue = parseFloat(supplyModeCompareValueRaw);
+            if (!Number.isFinite(supplyModeValue)) {
+                throw new Error("12V supply trigger value must be a number");
+            }
+            supplyModeCompareValue = supplyModeValue;
+        }
+
+        const voltageRiseWakeupValue = document.getElementById("voltage_rise_wakeup")?.value || 'enable';
+        const voltageRiseEnabled = voltageRiseWakeupValue === 'enable';
+        const voltageRiseThresholdRaw = document.getElementById("voltage_rise_threshold")?.value;
+        const voltageRiseTimeSecondsRaw = document.getElementById("voltage_rise_time_seconds")?.value;
+        let voltageRiseThresholdValue = null;
+        let voltageRiseTimeSecondsValue = null;
+        if (voltageRiseEnabled) {
+            const threshold = parseFloat(voltageRiseThresholdRaw);
+            if (!Number.isFinite(threshold) || threshold < 0.1 || threshold > 5.0) {
+                throw new Error("Voltage rise threshold must be between 0.1V and 5.0V");
+            }
+            voltageRiseThresholdValue = threshold;
+
+            const riseTimeSeconds = parseInt(voltageRiseTimeSecondsRaw, 10);
+            if (!Number.isFinite(riseTimeSeconds) || riseTimeSeconds < 1 || riseTimeSeconds > 3600) {
+                throw new Error("Voltage rise time must be between 1 and 3600 seconds");
+            }
+            voltageRiseTimeSecondsValue = riseTimeSeconds;
+        }
+
+        const imuVoltageOverrideValue = document.getElementById("imu_voltage_override")?.value || 'disable';
+        const bootPidPollingKeepAliveSeconds = parseInt(
+            document.getElementById("boot_pid_polling_keep_alive_seconds")?.value,
+            10
+        );
+        if (!Number.isFinite(bootPidPollingKeepAliveSeconds) || bootPidPollingKeepAliveSeconds < 0) {
+            throw new Error("Bootup keep-alive seconds must be 0 or greater");
+        }
         const pidPollingMinVoltageValueRaw = document.getElementById("pid_polling_min_voltage")?.value;
         const pidPollingMinVoltageValue = (() => {
             const n = parseFloat(pidPollingMinVoltageValueRaw);
@@ -2663,6 +2883,7 @@ async function storeAutoTableData() {
                 if (!Number.isInteger(d.cycle)) { showNotification(`Destination ${i+1} cycle invalid`,'red'); return false; }
                 if (d.cycle!==0 && d.cycle<1000){ showNotification(`Destination ${i+1} cycle must be >=1000 or 0`,'red'); return false; }
                 if (d.destination && d.destination.length > 1024){ showNotification(`Destination ${i+1} URL/topic >1024 chars`,'red'); return false; }
+                if (d.type==='MQTT_Debug' && !d.destination){ showNotification(`Destination ${i+1} requires an MQTT debug topic`,'red'); return false; }
                 if (d.type==='ABRP_API' && !d.api_token){ showNotification(`Destination ${i+1} requires API token`,'red'); return false; }
                 if (d.api_token && d.api_token.length > 512){ showNotification(`Destination ${i+1} API token >512 chars`,'red'); return false; }
                 if (d.type==='HTTPS' && !d.cert_set){ showNotification(`Destination ${i+1} select cert set`,'red'); return false; }
@@ -2763,6 +2984,15 @@ async function storeAutoTableData() {
         const jsonData = {
             grouping: groupingValue,
             disable_on_sleep_voltage: disableOnSleepVoltageValue,
+            supply_mode_enabled: supplyModeEnabledValue,
+            supply_mode_pid_name: supplyModePidNameValue,
+            supply_mode_operator: supplyModeOperatorValue,
+            supply_mode_value: supplyModeCompareValue,
+            voltage_rise_wakeup: voltageRiseWakeupValue,
+            voltage_rise_threshold: voltageRiseThresholdValue,
+            voltage_rise_time_seconds: voltageRiseTimeSecondsValue,
+            imu_voltage_override: imuVoltageOverrideValue,
+            boot_pid_polling_keep_alive_seconds: bootPidPollingKeepAliveSeconds,
             pid_polling_min_voltage: pidPollingMinVoltageValue,
             webhook_data_mode: webhook_data_mode,
             car_specific: carSpecificValue,
@@ -3262,6 +3492,174 @@ function configurePeriodicWakeup(elements) {
         if (elements.scheduledWakeupRow) {
             elements.scheduledWakeupRow.style.display = mode === "scheduled" ? "table-row" : "none";
         }
+    }
+}
+
+function imuHexByte(value) {
+    if (value === undefined || value === null || !Number.isFinite(Number(value))) return "N/A";
+    return "0x" + (Number(value) & 0xFF).toString(16).toUpperCase().padStart(2, "0");
+}
+
+function imuEscapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    }[ch]));
+}
+
+function imuBoolText(value) {
+    return value ? "yes" : "no";
+}
+
+function imuAccelOdrText(value) {
+    const map = {
+        5: "1.6 kHz (LN)",
+        6: "800 Hz (LN)",
+        7: "400 Hz",
+        8: "200 Hz",
+        9: "100 Hz",
+        10: "50 Hz",
+        11: "25 Hz",
+        12: "12.5 Hz",
+        13: "6.25 Hz",
+        14: "3.125 Hz",
+        15: "1.5625 Hz"
+    };
+    return map[Number(value)] || `reserved (${value})`;
+}
+
+function imuAccelAvgText(value) {
+    const map = {
+        0: "2x",
+        1: "4x",
+        2: "8x",
+        3: "16x",
+        4: "32x",
+        5: "64x",
+        6: "64x",
+        7: "64x"
+    };
+    return map[Number(value)] || `unknown (${value})`;
+}
+
+function imuWomDurText(value) {
+    const map = {
+        0: "first overthreshold event",
+        1: "second overthreshold event",
+        2: "third overthreshold event",
+        3: "fourth overthreshold event"
+    };
+    return map[Number(value)] || `unknown (${value})`;
+}
+
+function imuAccelModeText(value) {
+    const map = {
+        0: "off",
+        1: "off",
+        2: "low power",
+        3: "low noise"
+    };
+    return map[Number(value)] || `unknown (${value})`;
+}
+
+function imuGyroModeText(value) {
+    const map = {
+        0: "off",
+        1: "standby",
+        2: "reserved",
+        3: "low noise"
+    };
+    return map[Number(value)] || `unknown (${value})`;
+}
+
+function imuThresholdMg(value) {
+    if (value === undefined || value === null || !Number.isFinite(Number(value))) return "N/A";
+    return (Number(value) * 1000 / 256).toFixed(1) + " mg";
+}
+
+function imuRegisterRow(name, value, decoded) {
+    return `<tr><td style="padding:4px 8px; white-space:nowrap;"><code>${imuEscapeHtml(name)}</code></td><td style="padding:4px 8px; white-space:nowrap;"><code>${imuEscapeHtml(imuHexByte(value))}</code></td><td style="padding:4px 8px;">${imuEscapeHtml(decoded)}</td></tr>`;
+}
+
+function renderImuState(data) {
+    const r = data.registers || {};
+    const configured = data.configured || {};
+    const runtime = data.runtime || {};
+    const accel = data.accel || {};
+
+    const womConfig = Number(r.WOM_CONFIG || 0);
+    const intSource1 = Number(r.INT_SOURCE1 || 0);
+    const accelConfig0 = Number(r.ACCEL_CONFIG0 || 0);
+    const accelConfig1 = Number(r.ACCEL_CONFIG1 || 0);
+    const pwrMgmt0 = Number(r.PWR_MGMT0 || 0);
+    const intConfig = Number(r.INT_CONFIG || 0);
+    const apexConfig1 = Number(r.APEX_CONFIG1 || 0);
+    const mclkRdy = Number(r.MCLK_RDY || 0);
+    const intStatus2Cached = Number(r.INT_STATUS2_CACHED || 0);
+
+    const rows = [
+        imuRegisterRow("WHO_AM_I", r.WHO_AM_I, Number(r.WHO_AM_I) === 0x67 ? "ICM-42670-P detected" : "unexpected device id"),
+        imuRegisterRow("MCLK_RDY", r.MCLK_RDY, `MCLK ready: ${imuBoolText((mclkRdy & 0x08) !== 0)}`),
+        imuRegisterRow("PWR_MGMT0", r.PWR_MGMT0, `accel: ${imuAccelModeText(pwrMgmt0 & 0x03)}, gyro: ${imuGyroModeText((pwrMgmt0 >> 2) & 0x03)}, LP clock: ${(pwrMgmt0 & 0x80) ? "RC oscillator" : "wake-up oscillator"}`),
+        imuRegisterRow("INT_CONFIG", r.INT_CONFIG, `INT1: ${((intConfig >> 2) & 1) ? "latched" : "pulsed"}, ${((intConfig >> 1) & 1) ? "push-pull" : "open-drain"}, ${(intConfig & 1) ? "active-high" : "active-low"}`),
+        imuRegisterRow("INT_SOURCE1", r.INT_SOURCE1, `INT1 routes: SMD=${imuBoolText((intSource1 & 0x08) !== 0)}, X=${imuBoolText((intSource1 & 0x01) !== 0)}, Y=${imuBoolText((intSource1 & 0x02) !== 0)}, Z=${imuBoolText((intSource1 & 0x04) !== 0)}`),
+        imuRegisterRow("WOM_CONFIG", r.WOM_CONFIG, `enabled: ${imuBoolText((womConfig & 0x01) !== 0)}, duration: ${imuWomDurText((womConfig >> 3) & 0x03)}, mode: ${((womConfig >> 2) & 1) ? "AND" : "OR"}, ref: ${((womConfig >> 1) & 1) ? "LAST" : "INITIAL"}`),
+        imuRegisterRow("ACCEL_CONFIG0", r.ACCEL_CONFIG0, `FSR: ${["16g", "8g", "4g", "2g"][(accelConfig0 >> 5) & 0x03]}, ODR: ${imuAccelOdrText(accelConfig0 & 0x0F)}`),
+        imuRegisterRow("ACCEL_CONFIG1", r.ACCEL_CONFIG1, `LP avg: ${imuAccelAvgText((accelConfig1 >> 4) & 0x07)}, filter code: ${accelConfig1 & 0x07}`),
+        imuRegisterRow("APEX_CONFIG1", r.APEX_CONFIG1, `SMD enabled: ${imuBoolText((apexConfig1 & 0x40) !== 0)}, DMP ODR code: ${apexConfig1 & 0x03}`),
+        imuRegisterRow("INT_STATUS2_CACHED", r.INT_STATUS2_CACHED, `cached last trigger: SMD=${imuBoolText((intStatus2Cached & 0x08) !== 0)}, X=${imuBoolText((intStatus2Cached & 0x04) !== 0)}, Y=${imuBoolText((intStatus2Cached & 0x02) !== 0)}, Z=${imuBoolText((intStatus2Cached & 0x01) !== 0)}`),
+        imuRegisterRow("ACCEL_WOM_X_THR", r.ACCEL_WOM_X_THR, imuThresholdMg(r.ACCEL_WOM_X_THR)),
+        imuRegisterRow("ACCEL_WOM_Y_THR", r.ACCEL_WOM_Y_THR, imuThresholdMg(r.ACCEL_WOM_Y_THR)),
+        imuRegisterRow("ACCEL_WOM_Z_THR", r.ACCEL_WOM_Z_THR, imuThresholdMg(r.ACCEL_WOM_Z_THR))
+    ];
+
+    const configuredText = [
+        `threshold ${configured.threshold ?? "N/A"} (${configured.threshold_mg !== undefined ? Number(configured.threshold_mg).toFixed(1) + " mg" : "N/A"})`,
+        `sources X=${imuBoolText(configured.wom_x_enabled)} Y=${imuBoolText(configured.wom_y_enabled)} Z=${imuBoolText(configured.wom_z_enabled)} SMD=${imuBoolText(configured.smd_enabled)}`,
+        `ODR ${imuAccelOdrText(configured.accel_odr)}, avg ${imuAccelAvgText(configured.accel_avg)}, duration ${imuWomDurText(configured.wom_int_dur)}, mode ${Number(configured.wom_int_mode) ? "AND" : "OR"}, ref ${Number(configured.wom_ref_mode) ? "LAST" : "INITIAL"}`
+    ].join("; ");
+
+    const accelText = accel.valid
+        ? `accel X=${Number(accel.x_g).toFixed(3)}g Y=${Number(accel.y_g).toFixed(3)}g Z=${Number(accel.z_g).toFixed(3)}g`
+        : "accel read unavailable";
+
+    return `
+        <div style="margin-bottom:0.5rem;"><b>IMU State</b></div>
+        <table style="border-collapse:collapse; width:100%; margin-bottom:0.75rem;">
+            <thead><tr><th style="text-align:left; padding:4px 8px;">Register</th><th style="text-align:left; padding:4px 8px;">Value</th><th style="text-align:left; padding:4px 8px;">Decoded</th></tr></thead>
+            <tbody>${rows.join("")}</tbody>
+        </table>
+        <div><b>Configured:</b> ${imuEscapeHtml(configuredText)}</div>
+        <div><b>Runtime:</b> activity ${imuEscapeHtml(runtime.activity_state || "N/A")}; counts X=${Number(runtime.wom_x_count || 0)} Y=${Number(runtime.wom_y_count || 0)} Z=${Number(runtime.wom_z_count || 0)}; last_active_ms=${Number(runtime.last_active_ms || 0)}</div>
+        <div><b>Live Read:</b> ${imuEscapeHtml(accelText)}</div>
+        <div style="color:var(--gray-600); margin-top:0.5rem;">INT_STATUS2 is shown from the cached firmware value so this read does not clear a pending IMU interrupt.</div>
+    `;
+}
+
+async function readImuState() {
+    const outputRow = document.getElementById("imu_state_output_row");
+    const output = document.getElementById("imu_state_output");
+    const button = document.getElementById("read_imu_state_button");
+
+    if (outputRow) outputRow.style.display = "";
+    if (output) output.textContent = "Reading IMU state...";
+    if (button) button.disabled = true;
+
+    try {
+        const response = await fetch('/api/imu_state', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok || data.ok === false) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        if (output) output.innerHTML = renderImuState(data);
+    } catch (error) {
+        if (output) output.textContent = "Unable to read IMU state: " + error.message;
+        showNotification("Unable to read IMU state: " + error.message, "red");
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 
@@ -4053,6 +4451,14 @@ async function postConfig() {
     obj["log_storage"] = document.getElementById("log_storage").value;
     obj["log_period"] = document.getElementById("log_period").value;
     obj["imu_threshold"] = document.getElementById("imu_threshold").value;
+    obj["imu_wom_x"] = document.getElementById("imu_wom_x")?.checked ? "enable" : "disable";
+    obj["imu_wom_y"] = document.getElementById("imu_wom_y")?.checked ? "enable" : "disable";
+    obj["imu_wom_z"] = document.getElementById("imu_wom_z")?.checked ? "enable" : "disable";
+    obj["imu_accel_odr"] = document.getElementById("imu_accel_odr")?.value || "ICM42670_ACCEL_ODR_1_5625HZ";
+    obj["imu_accel_avg"] = document.getElementById("imu_accel_avg")?.value || "ICM42670_ACCEL_AVG_32X";
+    obj["imu_wom_int_dur"] = document.getElementById("imu_wom_int_dur")?.value || "ICM42670_WOM_INT_DUR_FOURTH";
+    obj["imu_wom_int_mode"] = document.getElementById("imu_wom_int_mode")?.value || "ICM42670_WOM_INT_MODE_ALL_OR";
+    obj["imu_wom_ref_mode"] = document.getElementById("imu_wom_ref_mode")?.value || "ICM42670_WOM_MODE_REF_LAST";
     obj["elm327_udp_log"] = document.getElementById("elm327_udp_log").value;
 
 
@@ -4701,7 +5107,25 @@ async function Load() {
         
         // Load IMU threshold value and update display
         document.getElementById("imu_threshold").value = obj.imu_threshold || "8";
-        document.getElementById("imu_threshold_value").textContent = ((obj.imu_threshold || 8) * 3.9).toFixed(1) + ' mg';
+        document.getElementById("imu_threshold_value").textContent = ((obj.imu_threshold || 8) * 1000 / 256).toFixed(1) + ' mg';
+
+        const imuWomX = document.getElementById("imu_wom_x");
+        const imuWomY = document.getElementById("imu_wom_y");
+        const imuWomZ = document.getElementById("imu_wom_z");
+        if (imuWomX) imuWomX.checked = obj.imu_wom_x !== "disable";
+        if (imuWomY) imuWomY.checked = obj.imu_wom_y !== "disable";
+        if (imuWomZ) imuWomZ.checked = obj.imu_wom_z !== "disable";
+
+        const imuAccelOdr = document.getElementById("imu_accel_odr");
+        const imuAccelAvg = document.getElementById("imu_accel_avg");
+        const imuWomIntDur = document.getElementById("imu_wom_int_dur");
+        const imuWomIntMode = document.getElementById("imu_wom_int_mode");
+        const imuWomRefMode = document.getElementById("imu_wom_ref_mode");
+        if (imuAccelOdr) imuAccelOdr.value = obj.imu_accel_odr || "ICM42670_ACCEL_ODR_1_5625HZ";
+        if (imuAccelAvg) imuAccelAvg.value = obj.imu_accel_avg || "ICM42670_ACCEL_AVG_32X";
+        if (imuWomIntDur) imuWomIntDur.value = obj.imu_wom_int_dur || "ICM42670_WOM_INT_DUR_FOURTH";
+        if (imuWomIntMode) imuWomIntMode.value = obj.imu_wom_int_mode || "ICM42670_WOM_INT_MODE_ALL_OR";
+        if (imuWomRefMode) imuWomRefMode.value = obj.imu_wom_ref_mode || "ICM42670_WOM_MODE_REF_LAST";
 
         // Load ELM327 UDP log toggle (default disabled)
         const elmUdp = document.getElementById("elm327_udp_log");

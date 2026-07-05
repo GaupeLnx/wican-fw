@@ -212,15 +212,6 @@ static const char *TAG = "icm42670";
 #define ICM42670_AGC_RDY_INT_BITS     0x01 // ICM42670_REG_INT_STATUS<0>
 #define ICM42670_AGC_RDY_INT_SHIFT    0    // ICM42670_REG_INT_STATUS<0>
 
-#define ICM42670_SMD_INT_BITS    0x08 // ICM42670_REG_INT_STATUS2<3>
-#define ICM42670_SMD_INT_SHIFT   3    // ICM42670_REG_INT_STATUS2<3>
-#define ICM42670_WOM_X_INT_BITS  0x04 // ICM42670_REG_INT_STATUS2<2>
-#define ICM42670_WOM_X_INT_SHIFT 2    // ICM42670_REG_INT_STATUS2<2>
-#define ICM42670_WOM_Y_INT_BITS  0x02 // ICM42670_REG_INT_STATUS2<1>
-#define ICM42670_WOM_Y_INT_SHIFT 1    // ICM42670_REG_INT_STATUS2<1>
-#define ICM42670_WOM_Z_INT_BITS  0x01 // ICM42670_REG_INT_STATUS2<0>
-#define ICM42670_WOM_Z_INT_SHIFT 0    // ICM42670_REG_INT_STATUS2<0>
-
 #define ICM42670_STEP_DET_INT_BITS      0x20 // ICM42670_REG_INT_STATUS3<5>
 #define ICM42670_STEP_DET_INT_SHIFT     5    // ICM42670_REG_INT_STATUS3<5>
 #define ICM42670_STEP_CNT_OVF_INT_BITS  0x10 // ICM42670_REG_INT_STATUS3<4>
@@ -659,6 +650,33 @@ esp_err_t icm42670_set_int_sources(icm42670_t *dev, uint8_t int_pin, icm42670_in
     }
 
     return ESP_OK;
+}
+
+esp_err_t icm42670_read_int_status2(icm42670_t *dev, uint8_t *status)
+{
+    CHECK_ARG(dev && status);
+
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    I2C_DEV_CHECK(&dev->i2c_dev, read_register(dev, ICM42670_REG_INT_STATUS2, status));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
+
+    return ESP_OK;
+}
+
+esp_err_t icm42670_read_register(icm42670_t *dev, uint8_t reg, uint8_t *value)
+{
+    CHECK_ARG(dev && value);
+
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    I2C_DEV_CHECK(&dev->i2c_dev, read_register(dev, reg, value));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
+
+    return ESP_OK;
+}
+
+esp_err_t icm42670_read_mreg_register(icm42670_t *dev, icm42670_mreg_number_t mreg_num, uint8_t reg, uint8_t *value)
+{
+    return read_mreg_register(dev, mreg_num, reg, value);
 }
 
 esp_err_t icm42670_config_wom(icm42670_t *dev, icm42670_wom_config_t config)

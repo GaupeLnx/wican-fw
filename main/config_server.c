@@ -100,6 +100,8 @@
 #include "obd2_standard_pids.h"
 #include "restart_tracker.h"
 #include "restart_tracker_http.h"
+#include "icm42670.h"
+#include "imu.h"
 
 #include <ws_router.h>
 #include "ws_server.h"
@@ -256,6 +258,20 @@ static char timezone_val[64] = "CST6CDT,M3.2.0,M11.1.0";
 // --- NEW MQTT TIMESTAMP SETTING ---
 static char mqtt_include_timestamp_val[16] = "enable";
 // ----------------------------------
+
+static void config_server_load_string(cJSON *root, const char *key_name, char *dest, size_t dest_size, const char *default_value)
+{
+	cJSON *key = cJSON_GetObjectItem(root, key_name);
+	if(key == NULL || !cJSON_IsString(key) || key->valuestring == NULL ||
+	   strlen(key->valuestring) == 0 || strlen(key->valuestring) >= dest_size)
+	{
+		strlcpy(dest, default_value, dest_size);
+	}
+	else
+	{
+		strlcpy(dest, key->valuestring, dest_size);
+	}
+}
 
 // Force allocation into PSRAM regardless of size
 static void* cjson_psram_malloc(size_t size) {
@@ -1903,6 +1919,14 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "log_period", device_config.log_period);
 	cJSON_AddStringToObject(root, "log_storage", device_config.log_storage);
 	cJSON_AddStringToObject(root, "imu_threshold", device_config.imu_threshold);
+	cJSON_AddStringToObject(root, "imu_wom_x", device_config.imu_wom_x);
+	cJSON_AddStringToObject(root, "imu_wom_y", device_config.imu_wom_y);
+	cJSON_AddStringToObject(root, "imu_wom_z", device_config.imu_wom_z);
+	cJSON_AddStringToObject(root, "imu_accel_odr", device_config.imu_accel_odr);
+	cJSON_AddStringToObject(root, "imu_accel_avg", device_config.imu_accel_avg);
+	cJSON_AddStringToObject(root, "imu_wom_int_dur", device_config.imu_wom_int_dur);
+	cJSON_AddStringToObject(root, "imu_wom_int_mode", device_config.imu_wom_int_mode);
+	cJSON_AddStringToObject(root, "imu_wom_ref_mode", device_config.imu_wom_ref_mode);
 	cJSON_AddStringToObject(root, "elm327_udp_log", device_config.elm327_udp_log);
 	if(gpio_get_level(OBD_READY_PIN) == 1)
 	{
@@ -2093,6 +2117,121 @@ static esp_err_t check_status_handler(httpd_req_t *req)
     free((void *)resp_str);
     
     return ESP_OK;
+}
+
+static const char *config_server_activity_state_to_str(activity_state_t state)
+{
+	switch (state)
+	{
+	case ACTIVITY_STATE_STATIONARY:
+		return "stationary";
+	case ACTIVITY_STATE_ACTIVE:
+		return "active";
+	default:
+		return "invalid";
+	}
+}
+
+static esp_err_t imu_state_handler(httpd_req_t *req)
+{
+	imu_register_state_t state = {0};
+	esp_err_t ret = imu_read_register_state(&state);
+	cJSON *root = cJSON_CreateObject();
+
+	if (!root)
+	{
+		httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to allocate JSON");
+		return ESP_ERR_NO_MEM;
+	}
+
+	httpd_resp_set_type(req, "application/json");
+
+	if (ret != ESP_OK)
+	{
+		cJSON_AddBoolToObject(root, "ok", false);
+		cJSON_AddStringToObject(root, "error", esp_err_to_name(ret));
+		char *resp_str = cJSON_PrintUnformatted(root);
+		cJSON_Delete(root);
+		if (!resp_str)
+		{
+			httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to allocate response");
+			return ESP_ERR_NO_MEM;
+		}
+		httpd_resp_set_status(req, "500 Internal Server Error");
+		httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+		free(resp_str);
+		return ESP_OK;
+	}
+
+	cJSON_AddBoolToObject(root, "ok", true);
+
+	cJSON *registers = cJSON_AddObjectToObject(root, "registers");
+	if (registers)
+	{
+		cJSON_AddNumberToObject(registers, "WHO_AM_I", state.who_am_i);
+		cJSON_AddNumberToObject(registers, "MCLK_RDY", state.mclk_rdy);
+		cJSON_AddNumberToObject(registers, "PWR_MGMT0", state.pwr_mgmt0);
+		cJSON_AddNumberToObject(registers, "INT_CONFIG", state.int_config);
+		cJSON_AddNumberToObject(registers, "INT_SOURCE1", state.int_source1);
+		cJSON_AddNumberToObject(registers, "WOM_CONFIG", state.wom_config);
+		cJSON_AddNumberToObject(registers, "ACCEL_CONFIG0", state.accel_config0);
+		cJSON_AddNumberToObject(registers, "ACCEL_CONFIG1", state.accel_config1);
+		cJSON_AddNumberToObject(registers, "APEX_CONFIG1", state.apex_config1);
+		cJSON_AddNumberToObject(registers, "INT_STATUS2_CACHED", state.int_status2_cached);
+		cJSON_AddNumberToObject(registers, "ACCEL_WOM_X_THR", state.accel_wom_x_thr);
+		cJSON_AddNumberToObject(registers, "ACCEL_WOM_Y_THR", state.accel_wom_y_thr);
+		cJSON_AddNumberToObject(registers, "ACCEL_WOM_Z_THR", state.accel_wom_z_thr);
+	}
+
+	cJSON *configured = cJSON_AddObjectToObject(root, "configured");
+	if (configured)
+	{
+		cJSON_AddNumberToObject(configured, "threshold", state.configured_settings.threshold);
+		cJSON_AddNumberToObject(configured, "threshold_mg", state.configured_settings.threshold * 1000.0f / 256.0f);
+		cJSON_AddBoolToObject(configured, "wom_x_enabled", state.configured_settings.wom_x_enabled);
+		cJSON_AddBoolToObject(configured, "wom_y_enabled", state.configured_settings.wom_y_enabled);
+		cJSON_AddBoolToObject(configured, "wom_z_enabled", state.configured_settings.wom_z_enabled);
+		cJSON_AddBoolToObject(configured, "smd_enabled", state.configured_settings.smd_enabled);
+		cJSON_AddNumberToObject(configured, "accel_odr", state.configured_settings.accel_odr);
+		cJSON_AddNumberToObject(configured, "accel_avg", state.configured_settings.accel_avg);
+		cJSON_AddNumberToObject(configured, "wom_int_dur", state.configured_settings.wom_int_dur);
+		cJSON_AddNumberToObject(configured, "wom_int_mode", state.configured_settings.wom_int_mode);
+		cJSON_AddNumberToObject(configured, "wom_ref_mode", state.configured_settings.wom_ref_mode);
+	}
+
+	cJSON *runtime = cJSON_AddObjectToObject(root, "runtime");
+	if (runtime)
+	{
+		cJSON_AddStringToObject(runtime, "activity_state", config_server_activity_state_to_str(state.activity_state));
+		cJSON_AddNumberToObject(runtime, "wom_x_count", state.wom_x_count);
+		cJSON_AddNumberToObject(runtime, "wom_y_count", state.wom_y_count);
+		cJSON_AddNumberToObject(runtime, "wom_z_count", state.wom_z_count);
+		cJSON_AddNumberToObject(runtime, "last_active_ms", state.last_active_ms);
+	}
+
+	cJSON *accel = cJSON_AddObjectToObject(root, "accel");
+	if (accel)
+	{
+		cJSON_AddBoolToObject(accel, "valid", state.accel_valid);
+		if (state.accel_valid)
+		{
+			cJSON_AddNumberToObject(accel, "x_g", state.accel_x);
+			cJSON_AddNumberToObject(accel, "y_g", state.accel_y);
+			cJSON_AddNumberToObject(accel, "z_g", state.accel_z);
+		}
+	}
+
+	char *resp_str = cJSON_PrintUnformatted(root);
+	cJSON_Delete(root);
+	if (!resp_str)
+	{
+		httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to allocate response");
+		return ESP_ERR_NO_MEM;
+	}
+
+	httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
+	free(resp_str);
+	return ESP_OK;
 }
 
 typedef struct {
@@ -2526,6 +2665,12 @@ static const httpd_uri_t destinations_stats_uri = {
 	.uri       = "/api/destinations_stats",
 	.method    = HTTP_GET,
 	.handler   = destinations_stats_handler,
+	.user_ctx  = NULL
+};
+static const httpd_uri_t imu_state_uri = {
+	.uri       = "/api/imu_state",
+	.method    = HTTP_GET,
+	.handler   = imu_state_handler,
 	.user_ctx  = NULL
 };
 static const httpd_uri_t check_status_uri = {
@@ -3593,6 +3738,24 @@ static void config_server_load_cfg(char *cfg)
 	ESP_LOGI(TAG, "device_config.imu_threshold: %s", device_config.imu_threshold);
 	//*****
 
+	config_server_load_string(root, "imu_wom_x", device_config.imu_wom_x, sizeof(device_config.imu_wom_x), "enable");
+	config_server_load_string(root, "imu_wom_y", device_config.imu_wom_y, sizeof(device_config.imu_wom_y), "enable");
+	config_server_load_string(root, "imu_wom_z", device_config.imu_wom_z, sizeof(device_config.imu_wom_z), "enable");
+	config_server_load_string(root, "imu_accel_odr", device_config.imu_accel_odr, sizeof(device_config.imu_accel_odr), "ICM42670_ACCEL_ODR_1_5625HZ");
+	config_server_load_string(root, "imu_accel_avg", device_config.imu_accel_avg, sizeof(device_config.imu_accel_avg), "ICM42670_ACCEL_AVG_32X");
+	config_server_load_string(root, "imu_wom_int_dur", device_config.imu_wom_int_dur, sizeof(device_config.imu_wom_int_dur), "ICM42670_WOM_INT_DUR_FOURTH");
+	config_server_load_string(root, "imu_wom_int_mode", device_config.imu_wom_int_mode, sizeof(device_config.imu_wom_int_mode), "ICM42670_WOM_INT_MODE_ALL_OR");
+	config_server_load_string(root, "imu_wom_ref_mode", device_config.imu_wom_ref_mode, sizeof(device_config.imu_wom_ref_mode), "ICM42670_WOM_MODE_REF_LAST");
+	ESP_LOGI(TAG, "IMU WOM config: x=%s y=%s z=%s odr=%s avg=%s dur=%s mode=%s ref=%s",
+		device_config.imu_wom_x,
+		device_config.imu_wom_y,
+		device_config.imu_wom_z,
+		device_config.imu_accel_odr,
+		device_config.imu_accel_avg,
+		device_config.imu_wom_int_dur,
+		device_config.imu_wom_int_mode,
+		device_config.imu_wom_ref_mode);
+
 	//*****
 	// elm327_udp_log (optional; default disabled)
 	key = cJSON_GetObjectItem(root,"elm327_udp_log");
@@ -3679,8 +3842,86 @@ config_error_no_json:
 	}
 	vTaskDelay(3000 / portTICK_PERIOD_MS);
 	restart_tracker_restart(RESTART_TRACKER_PLANNED_REASON_CONFIG_RECOVERY,
-					 RESTART_TRACKER_SOURCE_CONFIG_SERVER,
-					 RESTART_TRACKER_FLAG_SETTINGS_SAVED | RESTART_TRACKER_FLAG_RECOVERY_ACTION);
+						 RESTART_TRACKER_SOURCE_CONFIG_SERVER,
+						 RESTART_TRACKER_FLAG_SETTINGS_SAVED | RESTART_TRACKER_FLAG_RECOVERY_ACTION);
+}
+
+static void config_server_load_config_file(bool create_default_if_missing)
+{
+	FILE* f = fopen(FS_MOUNT_POINT"/config.json", "r");
+	if (f == NULL)
+	{
+		if (!create_default_if_missing)
+		{
+			ESP_LOGI(TAG, "Config file does not exist, using defaults for early config preload");
+			return;
+		}
+
+		ESP_LOGI(TAG, "Config file does not exist, loading default");
+		f = fopen(FS_MOUNT_POINT"/config.json", "w");
+		if (f != NULL)
+		{
+			fprintf(f, device_config_default, (char*)device_id, (char*)device_id, (char*)device_id);
+			fclose(f);
+			f = fopen(FS_MOUNT_POINT"/config.json", "r");
+			ESP_LOGW(TAG, "Config file trying to load again");
+		}
+	}
+
+	if (f != NULL)
+	{
+		fseek(f, 0, SEEK_END);
+		long filesize = ftell(f);
+		fseek(f, 0, SEEK_SET);
+
+		if (filesize < 0)
+		{
+			ESP_LOGE(TAG, "Failed to determine config file size");
+			fclose(f);
+			return;
+		}
+
+		if (device_config_file != NULL)
+		{
+			heap_caps_free(device_config_file);
+			device_config_file = NULL;
+		}
+
+		device_config_file = heap_caps_malloc((size_t)filesize + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+		if (device_config_file != NULL)
+		{
+			memset(device_config_file, 0, (size_t)filesize + 1);
+			size_t bytes_read = fread(device_config_file, sizeof(char), (size_t)filesize, f);
+			fclose(f);
+			if (bytes_read != (size_t)filesize)
+			{
+				ESP_LOGE(TAG, "Failed to read complete config file");
+				heap_caps_free(device_config_file);
+				device_config_file = NULL;
+				return;
+			}
+
+			device_config_file[filesize] = 0;
+			ESP_LOGI(TAG, "config.json: %s", device_config_file);
+			config_server_load_cfg(device_config_file);
+		}
+		else
+		{
+			ESP_LOGE(TAG, "Failed to allocate memory for config file");
+			fclose(f);
+		}
+	}
+}
+
+void config_server_preload_config(char *did)
+{
+	if (did != NULL)
+	{
+		device_id = did;
+	}
+
+	filesystem_init();
+	config_server_load_config_file(false);
 }
 
 void config_server_wifi_connected(bool flag)
@@ -3742,6 +3983,7 @@ static void register_server_uris(void)
 	httpd_register_uri_handler(server, &autopid_data);
 	httpd_register_uri_handler(server, &load_car_config_uri);
 	httpd_register_uri_handler(server, &destinations_stats_uri);
+	httpd_register_uri_handler(server, &imu_state_uri);
 	httpd_register_uri_handler(server, &store_car_data_uri);
 	httpd_register_uri_handler(server, &system_commands);
 	httpd_register_uri_handler(server, &scan_available_pids_uri);
@@ -3834,49 +4076,12 @@ static httpd_handle_t config_server_init(void)
 		filesystem_init();
 		// Initialize certificate manager storage (creates /certs if missing)
 		cert_manager_init();
-		// Initialize VPN manager
-		vpn_manager_init();
-		// Handle config.json
-		FILE* f = fopen(FS_MOUNT_POINT"/config.json", "r");
-		if (f == NULL)
-		{
-			ESP_LOGI(TAG, "Config file does not exist, loading default");
-			f = fopen(FS_MOUNT_POINT"/config.json", "w");
-			if (f != NULL)
-			{
-				fprintf(f, device_config_default, (char*)device_id, (char*)device_id, (char*)device_id);
-				fclose(f);
-				f = fopen(FS_MOUNT_POINT"/config.json", "r");
-				ESP_LOGW(TAG, "Config file trying to load again");
-			}
-		}
+			// Initialize VPN manager
+			vpn_manager_init();
+			config_server_load_config_file(true);
 
-		if (f != NULL)
-		{
-			fseek(f, 0, SEEK_END);
-			long filesize = ftell(f);
-			fseek(f, 0, SEEK_SET);
-
-			device_config_file = heap_caps_malloc(filesize + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-			if (device_config_file != NULL)
-			{
-				memset(device_config_file, 0, filesize + 1);
-				fread(device_config_file, sizeof(char), filesize, f);
-				device_config_file[filesize] = 0;
-				ESP_LOGI(TAG, "config.json: %s", device_config_file);
-				fclose(f);	//close file after reading, config_server_load_cfg might unlink it
-				config_server_load_cfg(device_config_file);
-			}
-			else
-			{
-				ESP_LOGE(TAG, "Failed to allocate memory for config file");
-				fclose(f);
-			}
-			
-		}
-
-		// Handle mqtt_canfilt.json
-		f = fopen(FS_MOUNT_POINT"/mqtt_canfilt.json", "r");
+			// Handle mqtt_canfilt.json
+			FILE* f = fopen(FS_MOUNT_POINT"/mqtt_canfilt.json", "r");
 		if (f != NULL)
 		{
 			fseek(f, 0, SEEK_END);
@@ -3915,7 +4120,7 @@ static httpd_handle_t config_server_init(void)
                        );
 
 	// Start the httpd server (reserve extra slots for cert manager endpoints)
-	config.max_uri_handlers = 38;
+	config.max_uri_handlers = 39;
 	config.stack_size = (10*1024);
 	config.max_open_sockets = 8;
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -4455,13 +4660,115 @@ int8_t config_server_get_imu_threshold(uint8_t *imu_threshold)
 		return -1;
 	}
 	
-	// Validate range (1-32 for ICM-42670-P)
-	if (imu_int < 1 || imu_int > 32)
+	// Validate raw 8-bit ICM-42670-P WOM threshold range.
+	if (imu_int < 0 || imu_int > 255)
 	{
 		return -1;
 	}
 	
 	*imu_threshold = (uint8_t)imu_int;
+	return 1;
+}
+
+typedef struct {
+	const char *name;
+	uint8_t value;
+} config_enum_map_t;
+
+static uint8_t config_server_enum_value_or_default(const char *name, const config_enum_map_t *map, size_t map_count, uint8_t default_value)
+{
+	if(name == NULL)
+	{
+		return default_value;
+	}
+
+	for(size_t i = 0; i < map_count; i++)
+	{
+		if(strcmp(name, map[i].name) == 0)
+		{
+			return map[i].value;
+		}
+	}
+
+	return default_value;
+}
+
+static bool config_server_enable_value_or_default(const char *name, bool default_value)
+{
+	if(name == NULL)
+	{
+		return default_value;
+	}
+	if(strcmp(name, "enable") == 0)
+	{
+		return true;
+	}
+	if(strcmp(name, "disable") == 0)
+	{
+		return false;
+	}
+	return default_value;
+}
+
+int8_t config_server_get_imu_settings(config_server_imu_settings_t *settings)
+{
+	if(settings == NULL)
+	{
+		return -1;
+	}
+
+	static const config_enum_map_t accel_odr_map[] = {
+		{"ICM42670_ACCEL_ODR_1_5625HZ", ICM42670_ACCEL_ODR_1_5625HZ},
+		{"ICM42670_ACCEL_ODR_3_125HZ", ICM42670_ACCEL_ODR_3_125HZ},
+		{"ICM42670_ACCEL_ODR_6_25HZ", ICM42670_ACCEL_ODR_6_25HZ},
+		{"ICM42670_ACCEL_ODR_12_5HZ", ICM42670_ACCEL_ODR_12_5HZ},
+		{"ICM42670_ACCEL_ODR_25HZ", ICM42670_ACCEL_ODR_25HZ},
+		{"ICM42670_ACCEL_ODR_50HZ", ICM42670_ACCEL_ODR_50HZ},
+		{"ICM42670_ACCEL_ODR_100HZ", ICM42670_ACCEL_ODR_100HZ},
+		{"ICM42670_ACCEL_ODR_200HZ", ICM42670_ACCEL_ODR_200HZ},
+		{"ICM42670_ACCEL_ODR_400HZ", ICM42670_ACCEL_ODR_400HZ},
+		{"ICM42670_ACCEL_ODR_800HZ", ICM42670_ACCEL_ODR_800HZ},
+		{"ICM42670_ACCEL_ODR_1_6KHZ", ICM42670_ACCEL_ODR_1_6KHZ},
+	};
+	static const config_enum_map_t accel_avg_map[] = {
+		{"ICM42670_ACCEL_AVG_2X", ICM42670_ACCEL_AVG_2X},
+		{"ICM42670_ACCEL_AVG_4X", ICM42670_ACCEL_AVG_4X},
+		{"ICM42670_ACCEL_AVG_8X", ICM42670_ACCEL_AVG_8X},
+		{"ICM42670_ACCEL_AVG_16X", ICM42670_ACCEL_AVG_16X},
+		{"ICM42670_ACCEL_AVG_32X", ICM42670_ACCEL_AVG_32X},
+		{"ICM42670_ACCEL_AVG_64X", ICM42670_ACCEL_AVG_64X},
+	};
+	static const config_enum_map_t wom_int_dur_map[] = {
+		{"ICM42670_WOM_INT_DUR_FIRST", ICM42670_WOM_INT_DUR_FIRST},
+		{"ICM42670_WOM_INT_DUR_SECOND", ICM42670_WOM_INT_DUR_SECOND},
+		{"ICM42670_WOM_INT_DUR_THIRD", ICM42670_WOM_INT_DUR_THIRD},
+		{"ICM42670_WOM_INT_DUR_FOURTH", ICM42670_WOM_INT_DUR_FOURTH},
+	};
+	static const config_enum_map_t wom_int_mode_map[] = {
+		{"ICM42670_WOM_INT_MODE_ALL_OR", ICM42670_WOM_INT_MODE_ALL_OR},
+		{"ICM42670_WOM_INT_MODE_ALL_AND", ICM42670_WOM_INT_MODE_ALL_AND},
+	};
+	static const config_enum_map_t wom_ref_mode_map[] = {
+		{"ICM42670_WOM_MODE_REF_INITIAL", ICM42670_WOM_MODE_REF_INITIAL},
+		{"ICM42670_WOM_MODE_REF_LAST", ICM42670_WOM_MODE_REF_LAST},
+	};
+
+	settings->threshold = 8;
+	(void)config_server_get_imu_threshold(&settings->threshold);
+	settings->wom_x_enabled = config_server_enable_value_or_default(device_config.imu_wom_x, true);
+	settings->wom_y_enabled = config_server_enable_value_or_default(device_config.imu_wom_y, true);
+	settings->wom_z_enabled = config_server_enable_value_or_default(device_config.imu_wom_z, true);
+	settings->accel_odr = config_server_enum_value_or_default(device_config.imu_accel_odr, accel_odr_map,
+		sizeof(accel_odr_map) / sizeof(accel_odr_map[0]), ICM42670_ACCEL_ODR_1_5625HZ);
+	settings->accel_avg = config_server_enum_value_or_default(device_config.imu_accel_avg, accel_avg_map,
+		sizeof(accel_avg_map) / sizeof(accel_avg_map[0]), ICM42670_ACCEL_AVG_32X);
+	settings->wom_int_dur = config_server_enum_value_or_default(device_config.imu_wom_int_dur, wom_int_dur_map,
+		sizeof(wom_int_dur_map) / sizeof(wom_int_dur_map[0]), ICM42670_WOM_INT_DUR_FOURTH);
+	settings->wom_int_mode = config_server_enum_value_or_default(device_config.imu_wom_int_mode, wom_int_mode_map,
+		sizeof(wom_int_mode_map) / sizeof(wom_int_mode_map[0]), ICM42670_WOM_INT_MODE_ALL_OR);
+	settings->wom_ref_mode = config_server_enum_value_or_default(device_config.imu_wom_ref_mode, wom_ref_mode_map,
+		sizeof(wom_ref_mode_map) / sizeof(wom_ref_mode_map[0]), ICM42670_WOM_MODE_REF_LAST);
+
 	return 1;
 }
 
@@ -4564,4 +4871,3 @@ int8_t config_server_get_mqtt_include_timestamp(void) {
     }
     return 0;
 }
-

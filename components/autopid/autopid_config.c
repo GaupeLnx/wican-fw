@@ -51,6 +51,18 @@ static char *strdup_psram(const char *s) {
     return copy;
 }
 
+static bool supply_mode_operator_is_valid(const char *op)
+{
+    return op &&
+        (strcmp(op, "=") == 0 ||
+         strcmp(op, "==") == 0 ||
+         strcmp(op, "<") == 0 ||
+         strcmp(op, ">") == 0 ||
+         strcmp(op, ">=") == 0 ||
+         strcmp(op, "<=") == 0 ||
+         strcmp(op, "!=") == 0);
+}
+
 static void replace_atsp_with_attp(char *str) {
     if (!str) return;
     for (size_t i = 0; str[i] != '\0'; i++) {
@@ -126,6 +138,7 @@ static destination_type_t destination_type_from_string(const char *t) {
     if (!t) return DEST_DEFAULT;
     if (strcasecmp(t, "MQTT_Topic") == 0) return DEST_MQTT_TOPIC;
     if (strcasecmp(t, "MQTT_WallBox") == 0) return DEST_MQTT_WALLBOX;
+    if (strcasecmp(t, "MQTT_Debug") == 0) return DEST_MQTT_DEBUG;
     if (strcasecmp(t, "MQTT_Grp") == 0) return DEST_MQTT_GRP;
     if (strcasecmp(t, "HTTP") == 0) return DEST_HTTP;
     if (strcasecmp(t, "HTTPS") == 0) return DEST_HTTPS;
@@ -436,6 +449,15 @@ static void parse_auto_pid_json(autopid_config_t *autopid_config, int *pid_index
     cJSON *ha_discovery_item = cJSON_GetObjectItem(root, "ha_discovery");
     cJSON *disable_on_sleep_voltage_item = cJSON_GetObjectItem(root, "disable_on_sleep_voltage");
     cJSON *pid_polling_min_voltage_item = cJSON_GetObjectItem(root, "pid_polling_min_voltage");
+    cJSON *boot_pid_polling_keep_alive_seconds_item = cJSON_GetObjectItem(root, "boot_pid_polling_keep_alive_seconds");
+    cJSON *voltage_rise_wakeup_item = cJSON_GetObjectItem(root, "voltage_rise_wakeup");
+    cJSON *voltage_rise_threshold_item = cJSON_GetObjectItem(root, "voltage_rise_threshold");
+    cJSON *voltage_rise_time_seconds_item = cJSON_GetObjectItem(root, "voltage_rise_time_seconds");
+    cJSON *supply_mode_enabled_item = cJSON_GetObjectItem(root, "supply_mode_enabled");
+    cJSON *supply_mode_pid_name_item = cJSON_GetObjectItem(root, "supply_mode_pid_name");
+    cJSON *supply_mode_operator_item = cJSON_GetObjectItem(root, "supply_mode_operator");
+    cJSON *supply_mode_value_item = cJSON_GetObjectItem(root, "supply_mode_value");
+    cJSON *imu_voltage_override_item = cJSON_GetObjectItem(root, "imu_voltage_override");
     cJSON *cycle_item = cJSON_GetObjectItem(root, "cycle");
     cJSON *pid_validation_item = cJSON_GetObjectItem(root, "pid_validation");
     cJSON *standard_pids_item = cJSON_GetObjectItem(root, "standard_pids");
@@ -504,6 +526,132 @@ static void parse_auto_pid_json(autopid_config_t *autopid_config, int *pid_index
         if (v >= 9.0f && v <= 18.0f)
         {
             autopid_config->pid_polling_min_voltage = v;
+        }
+    }
+
+    if (boot_pid_polling_keep_alive_seconds_item)
+    {
+        if (cJSON_IsNumber(boot_pid_polling_keep_alive_seconds_item))
+        {
+            double seconds = boot_pid_polling_keep_alive_seconds_item->valuedouble;
+            autopid_config->boot_pid_polling_keep_alive_seconds =
+                seconds > 0.0 ? (uint32_t)seconds : 0;
+        }
+        else if (cJSON_IsString(boot_pid_polling_keep_alive_seconds_item) &&
+                 boot_pid_polling_keep_alive_seconds_item->valuestring)
+        {
+            char *endptr = NULL;
+            long seconds = strtol(boot_pid_polling_keep_alive_seconds_item->valuestring, &endptr, 10);
+            if (endptr != boot_pid_polling_keep_alive_seconds_item->valuestring)
+            {
+                autopid_config->boot_pid_polling_keep_alive_seconds =
+                    seconds > 0 ? (uint32_t)seconds : 0;
+            }
+        }
+    }
+
+    autopid_config->voltage_rise_wakeup_enabled = true;
+    if (voltage_rise_wakeup_item)
+    {
+        if (cJSON_IsString(voltage_rise_wakeup_item) && voltage_rise_wakeup_item->valuestring)
+        {
+            autopid_config->voltage_rise_wakeup_enabled =
+                strcmp(voltage_rise_wakeup_item->valuestring, "disable") != 0;
+        }
+        else if (cJSON_IsBool(voltage_rise_wakeup_item))
+        {
+            autopid_config->voltage_rise_wakeup_enabled = cJSON_IsTrue(voltage_rise_wakeup_item);
+        }
+    }
+
+    autopid_config->voltage_rise_threshold = 0.2f;
+    if (voltage_rise_threshold_item)
+    {
+        float value = cJSON_IsNumber(voltage_rise_threshold_item)
+            ? (float)voltage_rise_threshold_item->valuedouble
+            : (cJSON_IsString(voltage_rise_threshold_item) && voltage_rise_threshold_item->valuestring
+                ? (float)atof(voltage_rise_threshold_item->valuestring)
+                : autopid_config->voltage_rise_threshold);
+        if (value >= 0.1f && value <= 5.0f)
+        {
+            autopid_config->voltage_rise_threshold = value;
+        }
+    }
+
+    autopid_config->voltage_rise_time_seconds = 20;
+    if (voltage_rise_time_seconds_item)
+    {
+        uint32_t seconds = cJSON_IsNumber(voltage_rise_time_seconds_item)
+            ? (uint32_t)voltage_rise_time_seconds_item->valuedouble
+            : (cJSON_IsString(voltage_rise_time_seconds_item) && voltage_rise_time_seconds_item->valuestring
+                ? (uint32_t)atoi(voltage_rise_time_seconds_item->valuestring)
+                : autopid_config->voltage_rise_time_seconds);
+        if (seconds >= 1 && seconds <= 3600)
+        {
+            autopid_config->voltage_rise_time_seconds = seconds;
+        }
+    }
+
+    autopid_config->supply_mode_enabled = false;
+    if (supply_mode_enabled_item)
+    {
+        if (cJSON_IsString(supply_mode_enabled_item) && supply_mode_enabled_item->valuestring)
+        {
+            autopid_config->supply_mode_enabled =
+                strcmp(supply_mode_enabled_item->valuestring, "enable") == 0;
+        }
+        else if (cJSON_IsBool(supply_mode_enabled_item))
+        {
+            autopid_config->supply_mode_enabled = cJSON_IsTrue(supply_mode_enabled_item);
+        }
+    }
+
+    const char *supply_mode_pid_name = NULL;
+    if (supply_mode_pid_name_item &&
+        cJSON_IsString(supply_mode_pid_name_item) &&
+        supply_mode_pid_name_item->valuestring &&
+        supply_mode_pid_name_item->valuestring[0] != '\0')
+    {
+        supply_mode_pid_name = supply_mode_pid_name_item->valuestring;
+    }
+    autopid_config->supply_mode_pid_name = strdup_psram(supply_mode_pid_name);
+
+    autopid_config->supply_mode_operator[0] = '\0';
+    if (supply_mode_operator_item &&
+        cJSON_IsString(supply_mode_operator_item) &&
+        supply_mode_operator_item->valuestring &&
+        supply_mode_operator_is_valid(supply_mode_operator_item->valuestring))
+    {
+        strncpy(autopid_config->supply_mode_operator,
+                supply_mode_operator_item->valuestring,
+                sizeof(autopid_config->supply_mode_operator) - 1);
+        autopid_config->supply_mode_operator[sizeof(autopid_config->supply_mode_operator) - 1] = '\0';
+    }
+
+    autopid_config->supply_mode_value = 0.0f;
+    if (supply_mode_value_item)
+    {
+        if (cJSON_IsNumber(supply_mode_value_item))
+        {
+            autopid_config->supply_mode_value = (float)supply_mode_value_item->valuedouble;
+        }
+        else if (cJSON_IsString(supply_mode_value_item) && supply_mode_value_item->valuestring)
+        {
+            autopid_config->supply_mode_value = (float)atof(supply_mode_value_item->valuestring);
+        }
+    }
+
+    autopid_config->imu_voltage_override_enabled = false;
+    if (imu_voltage_override_item)
+    {
+        if (cJSON_IsString(imu_voltage_override_item) && imu_voltage_override_item->valuestring)
+        {
+            autopid_config->imu_voltage_override_enabled =
+                strcmp(imu_voltage_override_item->valuestring, "disable") != 0;
+        }
+        else if (cJSON_IsBool(imu_voltage_override_item))
+        {
+            autopid_config->imu_voltage_override_enabled = cJSON_IsTrue(imu_voltage_override_item);
         }
     }
     
@@ -820,6 +968,8 @@ autopid_config_t *load_autopid_config(void)
 
     autopid_config_t *cfg = (autopid_config_t *)heap_caps_calloc(1, sizeof(autopid_config_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     if (!cfg) return NULL;
+
+    cfg->boot_pid_polling_keep_alive_seconds = 30;
     
     // 1. Load Files
     cJSON *root_auto = load_json_root_from_mount("auto_pid.json");
