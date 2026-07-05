@@ -54,6 +54,7 @@
 #include "esp_heap_caps.h"
 #include "autopid.h"
 #include "imu.h"
+#include "restart_tracker.h"
 
 // #define TAG __func__
 #define TAG "AUTO_PID"
@@ -204,6 +205,17 @@ static char *autopid_build_debug_payload(void)
     cJSON_AddBoolToObject(root, "pid_polling_paused", polling_state.paused);
     cJSON_AddStringToObject(root, "pause_reason",
                             polling_state.reason ? polling_state.reason : "none");
+
+    restart_tracker_state_t restart_state = {0};
+    if (restart_tracker_get_state(&restart_state) == ESP_OK)
+    {
+        cJSON_AddNumberToObject(root, "restart_unexpected_reset_count",
+                                restart_state.unexpected_reset_count);
+    }
+    else
+    {
+        cJSON_AddNumberToObject(root, "restart_unexpected_reset_count", 0);
+    }
 
     if (config_server_get_mqtt_include_timestamp() == 1)
     {
