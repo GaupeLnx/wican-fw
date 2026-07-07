@@ -5236,7 +5236,7 @@ void autopid_init(char *id, bool enable_logging, uint32_t logging_period)
     }
     
     ha_webhooks_init();
-    if (false && config_server_get_webhook_en()) {
+    if (config_server_get_webhook_en()) {
         static StackType_t *autopid_webhook_task_stack;
         static StaticTask_t autopid_webhook_task_buffer;
         static const size_t autopid_webhook_task_stack_depth = (1024 * 20);
