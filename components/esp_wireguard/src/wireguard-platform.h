@@ -37,6 +37,15 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include "esp_err.h"
+
+/*
+ * Initialise the platform layer (seeds the CTR-DRBG used by
+ * wireguard_random_bytes). Restored from v1.06.
+ * @return ESP_OK on success.
+ */
+esp_err_t wireguard_platform_init(void);
+
 // Peers are allocated statically inside the device structure to avoid malloc
 // Increased from 1 to support multiple Tailscale peers (10 peers for larger networks)
 #define WIREGUARD_MAX_PEERS 16
