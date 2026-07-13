@@ -2711,6 +2711,9 @@ void parse_elm327_response(char *buffer, response_t *response)
         if (data_start != NULL)
         {
             int header_length = data_start - frame;
+            if (header_length > 8) {
+                header_length = 8;
+            }
             char header_str[9] = {0};
             strncpy(header_str, frame, header_length);
             uint32_t current_header = strtoul(header_str, NULL, 16);
