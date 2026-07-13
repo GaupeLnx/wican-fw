@@ -310,4 +310,6 @@ bool autopid_lock(uint32_t timeout_ms);
 void autopid_unlock(void);
 bool autopid_car_is_on(void);
 
+void autopid_publish_discovery(void);
+
 #endif

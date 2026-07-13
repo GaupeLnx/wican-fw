@@ -63,6 +63,25 @@ static bool looks_like_ipv4_addr(const char *s)
     return true;
 }
 
+// Helper: Wipes Tailscale's hidden cryptographic node keys from NVS without touching Wi-Fi/MQTT settings
+static void tailscale_clear_saved_identity(void)
+{
+    nvs_handle_t ts_nvs;
+    // Note: If your Tailscale micro-client uses a different NVS namespace (e.g., "ts_state" or "tailscale"), update the string below:
+    if (nvs_open("tailscale", NVS_READWRITE, &ts_nvs) == ESP_OK)
+    {
+        ESP_LOGW(TAG, "Purging Tailscale Node Identity from NVS...");
+        nvs_erase_all(ts_nvs);
+        nvs_commit(ts_nvs);
+        nvs_close(ts_nvs);
+        ESP_LOGI(TAG, "Tailscale NVS identity wiped cleanly.");
+    }
+    else
+    {
+        ESP_LOGD(TAG, "No existing Tailscale NVS namespace found to wipe.");
+    }
+}
+
 static void parse_dns_list_ipv4_json(const char *value, char *out_main, size_t out_main_len, char *out_backup, size_t out_backup_len)
 {
     if (out_main && out_main_len) out_main[0] = '\0';
@@ -486,7 +505,7 @@ static esp_err_t vpn_store_config_handler(httpd_req_t *req)
     cJSON *vpn_enabled = cJSON_GetObjectItem(json, "vpn_enabled");
     ESP_LOGI(TAG, "vpn_enabled field: %s", vpn_enabled && cJSON_IsString(vpn_enabled) ? vpn_enabled->valuestring : "(not present)");
 
-    // === TAILSCALE NVS INJECTION (SAVE TO FLASH) ===
+    // === TAILSCALE NVS INJECTION (SAVE TO FLASH WITH IDENTITY PURGE) ===
     nvs_handle_t vpn_nvs;
     if (nvs_open("vpn", NVS_READWRITE, &vpn_nvs) == ESP_OK) {
         if (cJSON_IsString(vpn_enabled)) {
@@ -497,18 +516,30 @@ static esp_err_t vpn_store_config_handler(httpd_req_t *req)
         
         cJSON *ts_auth = cJSON_GetObjectItem(json, "tailscale_auth_key");
         if (cJSON_IsString(ts_auth)) {
-            nvs_set_str(vpn_nvs, "ts_auth", ts_auth->valuestring); // <--- Shortened Label
+            char current_ts_auth[128] = {0};
+            size_t len = sizeof(current_ts_auth);
+            esp_err_t err = nvs_get_str(vpn_nvs, "ts_auth", current_ts_auth, &len);
+            
+            // If the user provided a new, non-empty auth key that differs from what is currently stored,
+            // we must wipe the old Tailscale node identity from NVS so it can register as a fresh node!
+            if (strlen(ts_auth->valuestring) > 0 && 
+               (err != ESP_OK || strcmp(current_ts_auth, ts_auth->valuestring) != 0)) {
+                ESP_LOGI(TAG, "New Tailscale Auth Key detected! Purging old node identity...");
+                tailscale_clear_saved_identity();
+            }
+
+            nvs_set_str(vpn_nvs, "ts_auth", ts_auth->valuestring);
         }
         
         cJSON *ts_url = cJSON_GetObjectItem(json, "tailscale_control_url");
         if (cJSON_IsString(ts_url)) {
-            nvs_set_str(vpn_nvs, "ts_url", ts_url->valuestring); // <--- Shortened Label
+            nvs_set_str(vpn_nvs, "ts_url", ts_url->valuestring);
         }
         
         nvs_commit(vpn_nvs);
         nvs_close(vpn_nvs);
     }
-    // ===============================================
+    // ===================================================================
     
     if (cJSON_IsString(vpn_enabled) && strcmp(vpn_enabled->valuestring, "wireguard") == 0)
     {

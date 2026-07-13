@@ -148,7 +148,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             {
                 // Use snprintf for buffer safety
                 int len = snprintf(battery_buffer, sizeof(battery_buffer), 
-                                "{\"battery_voltage\": %.2f}", vbatt);
+                                "{\"battery_voltage\": %.1f}", vbatt);
                 
                 if (len > 0 && len < sizeof(battery_buffer)) 
                 {
@@ -166,8 +166,16 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 ESP_LOGE(TAG, "Failed to read battery voltage");
             }
 
+
             xEventGroupSetBits(s_mqtt_event_group, MQTT_CONNECTED_BIT);
+
+
+	    // --- THE DISCOVERY TRIGGER HERE ---
+            autopid_publish_discovery();
+            // --------------------------------------
+	    
 			break;
+			
 		case MQTT_EVENT_DISCONNECTED:
 			ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
             dev_status_clear_bits(DEV_MQTT_CONNECTED_BIT);
@@ -389,7 +397,7 @@ static void mqtt_parse_data(void *handler_args, esp_event_base_t base, int32_t e
         {
             float vbatt = 0;
             sleep_mode_get_voltage(&vbatt);
-            sprintf(cmd_response, "{\"battery_voltage\": %f}", vbatt);
+            sprintf(cmd_response, "{\"battery_voltage\": %.1f}", vbatt);
             mqtt_publish(mqtt_rsp_topic, cmd_response, strlen(cmd_response), 0, 0);
         }
         else

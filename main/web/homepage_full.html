@@ -1635,6 +1635,95 @@
                                     </select>
                                 </td>
                             </tr>
+
+ 
+                            <tr>
+                                <td colspan="2"><hr style="border: 0; border-top: 1px solid var(--gray-200); margin: 0.5rem 0;"></td>
+                            </tr>
+                            <tr>
+                                <td><label for="mqtt_discovery_en"><b>HA Auto Discovery:</b></label></td>
+                                <td>
+                                    <select name="mqtt_discovery_en" id="mqtt_discovery_en" onchange="toggleMqttDiscovery(); submit_enable();">
+                                        <option value="disable" selected>Disable</option>
+                                        <option value="enable">Enable</option>
+                                    </select>
+                                </td>
+                            </tr>
+			    
+			    <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_path"><b>Discovery Base Path:</b></label></td>
+                                <td>
+                                    <input type="text" id="mqtt_disc_path" name="mqtt_disc_path" value="homeassistant/wican/vehicle/config" oninput="submit_enable();" />
+                                    <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Full base path for MQTT discovery messages (default is "homeassistant/wican/vehicle/config").</div>
+                                </td>
+                            </tr>
+			    
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_id"><b>Device Identifier:</b></label></td>
+                                <td>
+                                    <input type="text" id="mqtt_disc_id" name="mqtt_disc_id" value="wican_pro_equinox" oninput="submit_enable();" />
+                                    <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Unique ID for Home Assistant. Changing this later will create a new device!</div>
+                                </td>
+                            </tr>
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_name"><b>Vehicle Name:</b></label></td>
+                                <td><input type="text" id="mqtt_disc_name" name="mqtt_disc_name" value="Chevy Equinox EV" oninput="submit_enable();" /></td>
+                            </tr>
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_model"><b>Vehicle Model:</b></label></td>
+                                <td><input type="text" id="mqtt_disc_model" name="mqtt_disc_model" value="EV" oninput="submit_enable();" /></td>
+                            </tr>
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_mfg"><b>Manufacturer:</b></label></td>
+                                <td><input type="text" id="mqtt_disc_mfg" name="mqtt_disc_mfg" value="Chevy" oninput="submit_enable();" /></td>
+                            </tr>
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_area"><b>Suggested Area:</b></label></td>
+                                <td><input type="text" id="mqtt_disc_area" name="mqtt_disc_area" value="Garage" oninput="submit_enable();" /></td>
+                            </tr>
+                            
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td colspan="2"><hr style="border: 0; border-top: 1px solid var(--gray-200); margin: 0.5rem 0;"></td>
+                            </tr>
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_pids_en"><b>Include PIDs:</b></label></td>
+                                <td>
+                                    <select name="mqtt_disc_pids_en" id="mqtt_disc_pids_en" onchange="submit_enable();">
+                                        <option value="disable">Disable</option>
+                                        <option value="enable" selected>Enable</option>
+                                    </select>
+                                    <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Publishes configured OBD2/CAN PIDs as Home Assistant sensors.</div>
+                                </td>
+                            </tr>
+                            <tr class="mqtt-discovery-row" style="display: none;">
+                                <td><label for="mqtt_disc_status_en"><b>Include WiCAN Status:</b></label></td>
+                                <td>
+                                    <select name="mqtt_disc_status_en" id="mqtt_disc_status_en" onchange="toggleMqttStatusDiscovery(); submit_enable();">
+                                        <option value="disable" selected>Disable</option>
+                                        <option value="enable">Enable</option>
+                                    </select>
+                                    <div style="font-size:0.75rem; color:#6b7280; margin-top:4px;">Publishes device health (Voltage, WiFi, Uptime) as sensors.</div>
+                                </td>
+                            </tr>
+                            <tr class="mqtt-discovery-status-row" style="display: none;">
+                                <td><label for="mqtt_disc_status_mode"><b>Status Send Mode:</b></label></td>
+                                <td>
+                                    <select name="mqtt_disc_status_mode" id="mqtt_disc_status_mode" onchange="toggleMqttStatusDiscovery(); submit_enable();">
+                                        <option value="periodic" selected>Periodic & On Change</option>
+                                        <option value="onchange">On Change Only</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr class="mqtt-discovery-status-row" id="mqtt_disc_status_period_row" style="display: none;">
+                                <td><label for="mqtt_disc_status_period"><b>Update Period (s):</b></label></td>
+                                <td>
+                                    <input type="number" id="mqtt_disc_status_period" name="mqtt_disc_status_period" value="60" min="1" max="86400" oninput="submit_enable();" />
+                                </td>
+                            </tr>
+
+
+
+			    
                         </table>
                         <div style="overflow-x:auto;">
                             <div class="section-title" style="margin-top: 1rem;">MQTT CAN Filter</div>

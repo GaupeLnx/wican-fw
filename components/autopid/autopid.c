@@ -2272,6 +2272,188 @@ void autopid_publish_all_destinations(bool is_event_trigger)
     free(raw_json);
 }
 
+
+// Helper to strip spaces/special chars for safe MQTT Object IDs
+static void sanitize_for_id(char *dest, const char *src, size_t max_len) {
+    size_t i = 0, j = 0;
+    while (src[i] && j < max_len - 1) {
+        if (isalnum((unsigned char)src[i])) {
+            dest[j++] = tolower((unsigned char)src[i]);
+        } else if (src[i] == ' ' || src[i] == '-' || src[i] == '_') {
+            dest[j++] = '_';
+        }
+        i++;
+    }
+    dest[j] = '\0';
+}
+
+// Translates WiCAN units into Home Assistant device classes
+static const char* get_ha_device_class(const char* unit) {
+    if (!unit || strlen(unit) == 0) return "";
+    
+    if (strcasecmp(unit, "V") == 0) return "voltage";
+    if (strcasecmp(unit, "A") == 0) return "current";
+    if (strcmp(unit, "°C") == 0 || strcmp(unit, "C") == 0) return "temperature";
+    if (strcmp(unit, "°F") == 0 || strcmp(unit, "F") == 0) return "temperature";
+    if (strcasecmp(unit, "kPa") == 0 || strcasecmp(unit, "psi") == 0 || strcasecmp(unit, "bar") == 0) return "pressure";
+    if (strcasecmp(unit, "km/h") == 0 || strcasecmp(unit, "mph") == 0) return "speed";
+    if (strcasecmp(unit, "kW") == 0 || strcasecmp(unit, "W") == 0) return "power";
+    if (strcasecmp(unit, "kWh") == 0 || strcasecmp(unit, "Wh") == 0) return "energy";
+    if (strcasecmp(unit, "km") == 0 || strcasecmp(unit, "mi") == 0) return "distance";
+    
+    // Fallback: HA handles %, rpm, and generic numbers perfectly without a specific device class
+    return ""; 
+}
+
+// Forward declaration to let the compiler know this returns a string pointer
+const char *config_server_get_mqtt_en(void);
+
+void autopid_publish_discovery(void)
+{
+    // Ensure MQTT is active before proceeding
+    if (strcmp(config_server_get_mqtt_en(), "enable") != 0) {
+        return;
+    }
+
+    // --- Pull Custom Settings from Web GUI ---
+    const char *base_path = config_server_get_mqtt_disc_path();
+    const char *disc_id   = config_server_get_mqtt_disc_id();
+    const char *disc_name = config_server_get_mqtt_disc_name();
+    const char *disc_model = config_server_get_mqtt_disc_model();
+    const char *disc_mfg   = config_server_get_mqtt_disc_mfg();
+    const char *disc_area  = config_server_get_mqtt_disc_area();
+
+    // --- Build The Global Device Blueprint ---
+    cJSON *device_obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(device_obj, "name", disc_name);
+    cJSON_AddStringToObject(device_obj, "model", disc_model);
+    cJSON_AddStringToObject(device_obj, "manufacturer", disc_mfg);
+    cJSON_AddStringToObject(device_obj, "suggested_area", disc_area);
+    cJSON_AddStringToObject(device_obj, "sw_version", "WiCAN Pro Firmware");
+
+    // Identifiers MUST match exactly across all sensors to group them
+    cJSON *identifiers_arr = cJSON_CreateArray();
+    cJSON_AddItemToArray(identifiers_arr, cJSON_CreateString(disc_id));
+    cJSON_AddItemToObject(device_obj, "identifiers", identifiers_arr);
+
+    // Helper macro to generate and publish a sensor
+    #define PUBLISH_HA_SENSOR(sensor_name, state_topic, val_template, unit, dev_class) do { \
+        cJSON *payload = cJSON_CreateObject(); \
+        cJSON_AddStringToObject(payload, "name", sensor_name); \
+        cJSON_AddStringToObject(payload, "state_topic", state_topic); \
+        cJSON_AddStringToObject(payload, "value_template", val_template); \
+        if (dev_class && strlen(dev_class) > 0) cJSON_AddStringToObject(payload, "device_class", dev_class); \
+        if (unit && strlen(unit) > 0) { \
+            cJSON_AddStringToObject(payload, "unit_of_measurement", unit); \
+            cJSON_AddStringToObject(payload, "state_class", "measurement"); /* Enables HA Graphing! */ \
+        } \
+        \
+        char safe_name[64]; \
+        sanitize_for_id(safe_name, sensor_name, sizeof(safe_name)); \
+        char unique_id[128]; \
+        snprintf(unique_id, sizeof(unique_id), "%s_%s", disc_id, safe_name); \
+        cJSON_AddStringToObject(payload, "unique_id", unique_id); \
+        \
+        cJSON_AddItemToObject(payload, "device", cJSON_Duplicate(device_obj, true)); \
+        \
+        char *json_str = cJSON_PrintUnformatted(payload); \
+        if (json_str) { \
+            char topic[256]; \
+            snprintf(topic, sizeof(topic), "%s/sensor/%s/%s/config", base_path, disc_id, safe_name); \
+            mqtt_publish(topic, json_str, strlen(json_str), 0, 1); /* 1 = Retain */ \
+            free(json_str); \
+        } \
+        cJSON_Delete(payload); \
+        vTaskDelay(pdMS_TO_TICKS(50)); /* Prevent flooding the broker */ \
+    } while(0)
+
+    // 2. Publish WiCAN Status Fields (if enabled)
+    if (strcmp(config_server_get_mqtt_disc_status_en(), "enable") == 0) {
+        char *status_topic = config_server_get_mqtt_status_topic();
+        
+        // --- Power & System ---
+        PUBLISH_HA_SENSOR("Battery Voltage", status_topic, "{{ value_json.batt_voltage | replace('V', '') | float | round(1) }}", "V", "voltage");
+        PUBLISH_HA_SENSOR("Uptime", status_topic, "{{ value_json.uptime }}", "", "");
+        PUBLISH_HA_SENSOR("Firmware Version", status_topic, "{{ value_json.fw_version }}", "", "");
+        PUBLISH_HA_SENSOR("Hardware Version", status_topic, "{{ value_json.hw_version }}", "", "");
+        PUBLISH_HA_SENSOR("Boot Count", status_topic, "{{ value_json.restart_boot_count }}", "", "");
+        PUBLISH_HA_SENSOR("Unexpected Resets", status_topic, "{{ value_json.restart_unexpected_reset_count }}", "", "");
+
+        // --- NEW RESTART DIAGNOSTIC SENSORS ---
+        PUBLISH_HA_SENSOR("Planned Restart", status_topic, "{{ value_json.restart_last_planned_reason }}", "", "");
+        PUBLISH_HA_SENSOR("Restart Source", status_topic, "{{ value_json.restart_last_source }}", "", "");
+	
+        // --- Network ---
+        PUBLISH_HA_SENSOR("WiFi Mode", status_topic, "{{ value_json.wifi_mode }}", "", "");
+        PUBLISH_HA_SENSOR("WiFi SSID", status_topic, "{{ value_json.sta_ssid }}", "", "");
+        PUBLISH_HA_SENSOR("IP Address", status_topic, "{{ value_json.sta_ip }}", "", "");
+        PUBLISH_HA_SENSOR("MAC Address", status_topic, "{{ value_json.mac_address }}", "", "");
+        PUBLISH_HA_SENSOR("AP Auto Disable", status_topic, "{{ value_json.ap_auto_disable }}", "", "");
+        PUBLISH_HA_SENSOR("STA IP Type", status_topic, "{{ value_json.sta_ip_type }}", "", "");
+        PUBLISH_HA_SENSOR("Home Priority", status_topic, "{{ value_json.sta_home_priority }}", "", "");
+        
+        // --- Hardware & Protocols ---
+        PUBLISH_HA_SENSOR("BLE Status", status_topic, "{{ value_json.ble_status }}", "", "");
+        PUBLISH_HA_SENSOR("CAN Mode", status_topic, "{{ value_json.can_mode }}", "", "");
+        PUBLISH_HA_SENSOR("CAN Datarate", status_topic, "{{ value_json.can_datarate }}", "", "");
+        PUBLISH_HA_SENSOR("Protocol", status_topic, "{{ value_json.protocol }}", "", "");
+        
+        // --- Sleep & Wakeup Settings ---
+        PUBLISH_HA_SENSOR("Sleep Status", status_topic, "{{ value_json.sleep_status }}", "", "");
+        PUBLISH_HA_SENSOR("Sleep Voltage", status_topic, "{{ value_json.sleep_volt }}", "V", "voltage");
+        PUBLISH_HA_SENSOR("Sleep Time", status_topic, "{{ value_json.sleep_time }}", "min", "");
+        PUBLISH_HA_SENSOR("Wakeup Voltage", status_topic, "{{ value_json.wakeup_volt }}", "V", "voltage");
+        PUBLISH_HA_SENSOR("Wakeup Mode", status_topic, "{{ value_json.wakeup_mode }}", "", "");
+        PUBLISH_HA_SENSOR("Wakeup Interval", status_topic, "{{ value_json.wakeup_interval }}", "min", "");
+        
+        // --- Diagnostics & Status ---
+        PUBLISH_HA_SENSOR("ECU Status", status_topic, "{{ value_json.ecu_status }}", "", "");
+        PUBLISH_HA_SENSOR("OBD Chip Status", status_topic, "{{ value_json.obd_chip_status }}", "", "");
+        PUBLISH_HA_SENSOR("VPN Status", status_topic, "{{ value_json.vpn_status }}", "", "");
+        PUBLISH_HA_SENSOR("Time Synced", status_topic, "{{ value_json.time_synced }}", "", "");
+    }
+
+    // 3. Publish OBD2/CAN PIDs (if enabled)
+    if (strcmp(config_server_get_mqtt_disc_pids_en(), "enable") == 0) {
+        if (autopid_lock(1000)) {
+            // Iterate through the loaded PIDs and build a sensor for each
+            if (autopid_config && autopid_config->pid_count > 0) {
+                for (uint32_t i = 0; i < autopid_config->pid_count; i++) {
+                    pid_data_t *curr_pid = &autopid_config->pids[i];
+                    if (!curr_pid->enabled) continue;
+		    
+                      for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                        parameter_t *param = &curr_pid->parameters[j];
+                        if (!param->enabled) continue;
+                        
+                        // We are routing DEST_DEFAULT through HA Discovery
+                        if (param->destination_type != DEST_DEFAULT) continue;
+
+                        char val_template[128];
+                        snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] }}", param->name);
+
+                        // Route DEST_DEFAULT to the global RX Topic
+                        const char *target_topic = config_server_get_mqtt_rx_topic();
+
+                        // Map the device class (Prioritize user-defined class if it exists, otherwise auto-map)
+                        const char *final_class = (param->class && strlen(param->class) > 0) 
+                            ? param->class 
+                            : get_ha_device_class(param->unit);
+
+                        PUBLISH_HA_SENSOR(param->name, target_topic, val_template, param->unit, final_class);
+                    }
+		   
+                }
+            }
+            autopid_unlock();
+        }
+    }
+
+    cJSON_Delete(device_obj);
+    ESP_LOGI(TAG, "Auto Discovery Publishing Complete.");
+}
+
+
 char *autopid_get_destinations_stats_json(void)
 {
     if (!autopid_config || !autopid_config->mutex)
@@ -4529,6 +4711,56 @@ static void autopid_webhook_task(void *pvParameters)
     }
 }
 
+
+static void autopid_publish_status_mqtt(void) {
+    // Throttle this check to only run once per second so we don't spam the CPU
+    static wc_timer_t check_timer = 0;
+    if (check_timer != 0 && !wc_timer_is_expired(&check_timer)) {
+        return;
+    }
+    wc_timer_set(&check_timer, 1000);
+
+    // Verify MQTT and Status publishing are both enabled
+    if (config_server_mqtt_en_config() != 1 || !mqtt_connected()) return;
+    if (strcmp(config_server_get_mqtt_disc_status_en(), "enable") != 0) return;
+
+    static wc_timer_t status_timer = 0;
+    static float last_voltage = -1.0;
+    
+    bool mode_periodic = (strcmp(config_server_get_mqtt_disc_status_mode(), "periodic") == 0);
+    bool should_publish = false;
+
+    if (mode_periodic) {
+        uint32_t period_sec = atoi(config_server_get_mqtt_disc_status_period());
+        if (period_sec < 1) period_sec = 60; // Fallback to 60s if invalid
+        
+        if (status_timer == 0 || wc_timer_is_expired(&status_timer)) {
+            should_publish = true;
+            wc_timer_set(&status_timer, period_sec * 1000);
+        }
+    } else {
+        // "On Change" Mode: Check if the battery voltage has drifted by 0.1V or more
+        float current_v = 0;
+        if (sleep_mode_get_voltage(&current_v) == ESP_OK) {
+            if (fabs(current_v - last_voltage) >= 0.1) {
+                should_publish = true;
+                last_voltage = current_v;
+            }
+        }
+    }
+
+    // Publish the payload
+    if (should_publish) {
+        char *status_json = config_server_get_status_json(false);
+        if (status_json) {
+            const char *topic = config_server_get_mqtt_status_topic();
+            // Publish with QoS 0, Retain 0
+            mqtt_publish(topic, status_json, strlen(status_json), 0, 0); 
+            free(status_json);
+        }
+    }
+}
+
 static void autopid_task(void *pvParameters)
 {
     static char default_init[] = "ati\rate0\rath1\ratl0\rats1\ratm0\ratst96\r";
@@ -5041,6 +5273,11 @@ if (any_param_enabled) {
             }
             wc_timer_set(&ecu_check_timer, 2000);
         }
+
+
+	// --- NEW: TRIGGER THE STATUS ENGINE ---
+        autopid_publish_status_mqtt();
+        // --------------------------------------
 
         // If PID polling is paused (e.g., low voltage), yield a bit longer to avoid a tight loop.
         // Otherwise, still yield minimally to stay watchdog-safe in edge cases (no work due).

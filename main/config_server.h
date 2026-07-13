@@ -204,6 +204,18 @@ typedef struct _device_config
         char car_on_param[64];
         char car_on_operator[8];
         char car_on_value[32];
+        char mqtt_discovery_en[16];
+        char mqtt_disc_id[64];
+        char mqtt_disc_path[128];
+        char mqtt_disc_name[64];
+        char mqtt_disc_model[64];
+        char mqtt_disc_mfg[64];
+        char mqtt_disc_area[64];
+        char mqtt_disc_pids_en[16];
+        char mqtt_disc_status_en[16];
+        char mqtt_disc_status_mode[16];
+        char mqtt_disc_status_period[16];
+  
 }device_config_t;
 
 
@@ -322,3 +334,17 @@ int8_t config_server_get_sleep_config(void);
 const char *config_server_get_car_on_param(void);
 const char *config_server_get_car_on_operator(void);
 const char *config_server_get_car_on_value(void);
+
+// ======= HA Auto Discovery Getters =======
+char *config_server_get_mqtt_discovery_en(void);
+char *config_server_get_mqtt_disc_id(void);
+char *config_server_get_mqtt_disc_path(void);
+char *config_server_get_mqtt_disc_name(void);
+char *config_server_get_mqtt_disc_model(void);
+char *config_server_get_mqtt_disc_mfg(void);
+char *config_server_get_mqtt_disc_area(void);
+
+char *config_server_get_mqtt_disc_pids_en(void);
+char *config_server_get_mqtt_disc_status_en(void);
+char *config_server_get_mqtt_disc_status_mode(void);
+char *config_server_get_mqtt_disc_status_period(void);

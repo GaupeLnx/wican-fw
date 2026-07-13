@@ -747,6 +747,16 @@ static void vpn_task_fn(void *arg)
         {
             if (s_backoff_ms == 0 || test_once)
             {
+                // ---> PASTE THE NEW SNIPPET RIGHT HERE <---
+                // Ensure system clock is synchronized before booting TLS-dependent VPNs (like Tailscale)
+                if (!dev_status_are_bits_set(DEV_TIME_SYNCED_BIT))
+                {
+                    ESP_LOGW(TAG, "Waiting for SNTP system clock sync before initiating VPN connection...");
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    continue;
+                }
+                // ------------------------------------------
+
                 if (current_config.type == VPN_TYPE_WIREGUARD)
                 {
                     esp_err_t vret = vpn_manager_validate_wireguard_config(&current_config.config.wireguard);

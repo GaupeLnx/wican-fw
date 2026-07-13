@@ -4446,6 +4446,7 @@ async function postConfig() {
     obj["mqtt_status_topic"] = document.getElementById("mqtt_status_topic").value;
     obj["mqtt_include_timestamp"] = document.getElementById("mqtt_include_timestamp").checked ? "enable" : "disable";
     obj["mqtt_elm327_log"] = document.getElementById("mqtt_elm327_log").value;
+   
     obj["logger_status"] = document.getElementById("logger_status").value;
     obj["log_filesystem"] = document.getElementById("log_filesystem").value;
     obj["log_storage"] = document.getElementById("log_storage").value;
@@ -4461,6 +4462,22 @@ async function postConfig() {
     obj["imu_wom_ref_mode"] = document.getElementById("imu_wom_ref_mode")?.value || "ICM42670_WOM_MODE_REF_LAST";
     obj["elm327_udp_log"] = document.getElementById("elm327_udp_log").value;
 
+
+    // --- HA AUTO DISCOVERY FIELDS ---
+    obj["mqtt_discovery_en"] = document.getElementById("mqtt_discovery_en")?.value || "disable";
+    obj["mqtt_disc_id"] = document.getElementById("mqtt_disc_id")?.value || "wican_pro_equinox";
+    obj["mqtt_disc_path"] = document.getElementById("mqtt_disc_path")?.value || "homeassistant/wican/vehicle/config";
+    obj["mqtt_disc_name"] = document.getElementById("mqtt_disc_name")?.value || "Chevy Equinox EV";
+    obj["mqtt_disc_model"] = document.getElementById("mqtt_disc_model")?.value || "EV";
+    obj["mqtt_disc_mfg"] = document.getElementById("mqtt_disc_mfg")?.value || "Chevy";
+    obj["mqtt_disc_area"] = document.getElementById("mqtt_disc_area")?.value || "Garage";
+    
+    obj["mqtt_disc_pids_en"] = document.getElementById("mqtt_disc_pids_en")?.value || "enable";
+    obj["mqtt_disc_status_en"] = document.getElementById("mqtt_disc_status_en")?.value || "disable";
+    obj["mqtt_disc_status_mode"] = document.getElementById("mqtt_disc_status_mode")?.value || "periodic";
+    obj["mqtt_disc_status_period"] = document.getElementById("mqtt_disc_status_period")?.value || "60";
+    // -------------------------------
+    
 
     obj["sta_ip_type"] = document.getElementById("sta_ip_type")?.value || "dhcp";
     obj["sta_static_ip"] = document.getElementById("sta_static_ip")?.value || "";
@@ -5195,6 +5212,26 @@ async function Load() {
                 certSel.value = desired; // in case options are already present
             }
         }
+
+
+// --- HA AUTO DISCOVERY FIELDS ---
+        if (obj.mqtt_discovery_en && document.getElementById("mqtt_discovery_en")) document.getElementById("mqtt_discovery_en").value = obj.mqtt_discovery_en;
+        if (obj.mqtt_disc_id && document.getElementById("mqtt_disc_id")) document.getElementById("mqtt_disc_id").value = obj.mqtt_disc_id;
+        if (obj.mqtt_disc_path && document.getElementById("mqtt_disc_path")) document.getElementById("mqtt_disc_path").value = obj.mqtt_disc_path;
+        if (obj.mqtt_disc_name && document.getElementById("mqtt_disc_name")) document.getElementById("mqtt_disc_name").value = obj.mqtt_disc_name;
+        if (obj.mqtt_disc_model && document.getElementById("mqtt_disc_model")) document.getElementById("mqtt_disc_model").value = obj.mqtt_disc_model;
+        if (obj.mqtt_disc_mfg && document.getElementById("mqtt_disc_mfg")) document.getElementById("mqtt_disc_mfg").value = obj.mqtt_disc_mfg;
+        if (obj.mqtt_disc_area && document.getElementById("mqtt_disc_area")) document.getElementById("mqtt_disc_area").value = obj.mqtt_disc_area;
+        
+        if (obj.mqtt_disc_pids_en && document.getElementById("mqtt_disc_pids_en")) document.getElementById("mqtt_disc_pids_en").value = obj.mqtt_disc_pids_en;
+        if (obj.mqtt_disc_status_en && document.getElementById("mqtt_disc_status_en")) document.getElementById("mqtt_disc_status_en").value = obj.mqtt_disc_status_en;
+        if (obj.mqtt_disc_status_mode && document.getElementById("mqtt_disc_status_mode")) document.getElementById("mqtt_disc_status_mode").value = obj.mqtt_disc_status_mode;
+        if (obj.mqtt_disc_status_period && document.getElementById("mqtt_disc_status_period")) document.getElementById("mqtt_disc_status_period").value = obj.mqtt_disc_status_period;
+        
+        try { toggleMqttDiscovery(); } catch(_) {}
+        // -------------------------------
+
+	
 
         // Restore Skip CN selection (default to disable)
         const skipSel = document.getElementById('mqtt_skip_cn');
@@ -8835,5 +8872,39 @@ function openStatusSubTab(evt, tabName) {
     // Add the "active" class to the button that opened the tab
     if (evt && evt.currentTarget) {
         evt.currentTarget.className += " active";
+    }
+}
+
+function toggleMqttDiscovery() {
+    const discSelect = document.getElementById("mqtt_discovery_en");
+    const rows = document.querySelectorAll(".mqtt-discovery-row");
+    const show = discSelect && discSelect.value === "enable";
+    
+    rows.forEach(row => {
+        row.style.display = show ? "table-row" : "none";
+    });
+    
+    toggleMqttStatusDiscovery();
+}
+
+function toggleMqttStatusDiscovery() {
+    const masterDiscSelect = document.getElementById("mqtt_discovery_en");
+    const statusDiscSelect = document.getElementById("mqtt_disc_status_en");
+    const modeSelect = document.getElementById("mqtt_disc_status_mode");
+    const periodRow = document.getElementById("mqtt_disc_status_period_row");
+    const statusRows = document.querySelectorAll(".mqtt-discovery-status-row");
+    
+    const masterShow = masterDiscSelect && masterDiscSelect.value === "enable";
+    const statusShow = statusDiscSelect && statusDiscSelect.value === "enable";
+    const showPeriod = modeSelect && modeSelect.value === "periodic";
+    
+    statusRows.forEach(row => {
+        if (row.id !== "mqtt_disc_status_period_row") {
+            row.style.display = (masterShow && statusShow) ? "table-row" : "none";
+        }
+    });
+
+    if (periodRow) {
+        periodRow.style.display = (masterShow && statusShow && showPeriod) ? "table-row" : "none";
     }
 }

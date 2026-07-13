@@ -129,6 +129,9 @@ char *device_config_file = NULL;
 static char *mqtt_canflt_file = NULL;
 static char *device_id;
 
+// Global cache for VPN type loaded at boot
+static char g_stored_vpn_type[32] = "disable";
+
 //Function prototypes
 static esp_err_t wifi_scan_handler(httpd_req_t *req);
 
@@ -242,6 +245,7 @@ const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\",\"we
 										\"batt_alert_url\":\"mqtt://mqtt.eclipseprojects.io\",\"batt_alert_port\":\"1883\",\"batt_alert_topic\":\"CAR1/voltage\",\"batt_mqtt_user\":\"meatpi\",\
 								\"batt_mqtt_pass\":\"meatpi\",\"batt_alert_time\":\"1\",\"mqtt_en\":\"disable\",\"mqtt_elm327_log\":\"disable\",\"elm327_udp_log\":\"disable\",\"mqtt_url\":\"mqtt://127.0.0.1\",\"mqtt_port\":\"1883\",\
 										\"mqtt_user\":\"meatpi\",\"mqtt_pass\":\"meatpi\",\"mqtt_tx_topic\":\"wican/%s/can/tx\",\"mqtt_rx_topic\":\"wican/%s/can/rx\",\"mqtt_status_topic\":\"wican/%s/can/status\",\"mqtt_security\":\"none\",\"mqtt_cert_set\": \"default\",\"mqtt_skip_cn\":\"disable\",\
+										\"mqtt_discovery_en\":\"disable\",\"mqtt_disc_id\":\"wican_pro_equinox\",\"mqtt_disc_path\":\"homeassistant\",\"mqtt_disc_name\":\"Chevy Equinox EV\",\"mqtt_disc_model\":\"EV\",\"mqtt_disc_mfg\":\"Chevy\",\"mqtt_disc_area\":\"Garage\",\"mqtt_disc_pids_en\":\"enable\",\"mqtt_disc_status_en\":\"disable\",\"mqtt_disc_status_mode\":\"periodic\",\"mqtt_disc_status_period\":\"60\",\
 										\"logger_status\":\"disable\",\"log_filesystem\":\"littlefs\",\"log_storage\":\"sdcard\",\"log_period\":\"10\"}";
 
 // const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\", \"ap_auto_disable\": \"disable\",\"sta_ssid\":\"MeatPi\",\"sta_pass\":\"TomatoSauce\",\"sta_security\":\"wpa3\",\"can_datarate\":\"500K\",\"can_mode\":\"normal\",\"port_type\":\"tcp\",\"port\":\"35000\",\"ap_pass\":\"@meatpi#\",\"protocol\":\"elm327\",\"ble_pass\":\"123456\",\"ble_status\":\"disable\",\"sleep_status\":\"disable\",\"sleep_volt\":\"13.1\",\"wakeup_volt\":\"13.5\",\"batt_alert\":\"disable\",\"batt_alert_ssid\":\"MeatPi\",\"batt_alert_pass\":\"TomatoSauce\",\"batt_alert_volt\":\"11.0\",\"batt_alert_protocol\":\"mqtt\",\"batt_alert_url\":\"mqtt://mqtt.eclipseprojects.io\",\"batt_alert_port\":\"1883\",\"batt_alert_topic\":\"CAR1/voltage\",\"batt_mqtt_user\":\"meatpi\",\"batt_mqtt_pass\":\"meatpi\",\"batt_alert_time\":\"1\",\"mqtt_en\":\"disable\",\"mqtt_elm327_log\":\"disable\",\"mqtt_url\":\"mqtt://127.0.0.1\",\"mqtt_port\":\"1883\",\"mqtt_user\":\"meatpi\",\"mqtt_pass\":\"meatpi\",\"mqtt_tx_topic\":\"wican/%s/can/tx\",\"mqtt_rx_topic\":\"wican/%s/can/rx\",\"mqtt_status_topic\":\"wican/%s/can/status\"}";
@@ -1993,6 +1997,23 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	cJSON_AddStringToObject(root, "mqtt_tx_topic", device_config.mqtt_tx_topic);
 	cJSON_AddStringToObject(root, "mqtt_rx_topic", device_config.mqtt_rx_topic);
 	cJSON_AddStringToObject(root, "mqtt_status_topic", device_config.mqtt_status_topic);
+
+
+        // --- HA AUTO DISCOVERY FIELDS ---
+	cJSON_AddStringToObject(root, "mqtt_discovery_en", device_config.mqtt_discovery_en);
+	cJSON_AddStringToObject(root, "mqtt_disc_id", device_config.mqtt_disc_id);
+	cJSON_AddStringToObject(root, "mqtt_disc_path", device_config.mqtt_disc_path);
+	cJSON_AddStringToObject(root, "mqtt_disc_name", device_config.mqtt_disc_name);
+	cJSON_AddStringToObject(root, "mqtt_disc_model", device_config.mqtt_disc_model);
+	cJSON_AddStringToObject(root, "mqtt_disc_mfg", device_config.mqtt_disc_mfg);
+	cJSON_AddStringToObject(root, "mqtt_disc_area", device_config.mqtt_disc_area);
+	
+	cJSON_AddStringToObject(root, "mqtt_disc_pids_en", device_config.mqtt_disc_pids_en);
+	cJSON_AddStringToObject(root, "mqtt_disc_status_en", device_config.mqtt_disc_status_en);
+	cJSON_AddStringToObject(root, "mqtt_disc_status_mode", device_config.mqtt_disc_status_mode);
+	cJSON_AddStringToObject(root, "mqtt_disc_status_period", device_config.mqtt_disc_status_period);
+	// --------------------------------
+
 	
 	// --- NEW MQTT TIMESTAMP SETTING ---
 	cJSON_AddStringToObject(root, "mqtt_include_timestamp", mqtt_include_timestamp_val);
@@ -2011,20 +2032,12 @@ char *config_server_get_status_json(bool remove_sensitive_info)
 	}
 
 
-  // === TAILSCALE UI STATUS PATCH ===
-	char stored_vpn_type[32] = "disable";
-	nvs_handle_t vpn_nvs;
-	if (nvs_open("vpn", NVS_READONLY, &vpn_nvs) == ESP_OK) {
-		size_t len = sizeof(stored_vpn_type);
-		nvs_get_str(vpn_nvs, "vpn_type", stored_vpn_type, &len);
-		nvs_close(vpn_nvs);
-	}
-
+        // === TAILSCALE UI STATUS PATCH ===
 	vpn_status_t vpn_status = vpn_manager_get_status();
 	const char *vpn_status_str;
 
-	// 1. Check if Tailscale is active via NVS
-	if (strcmp(stored_vpn_type, "tailscale") == 0) {
+	// 1. Check if Tailscale is active via the global boot variable
+	if (strcmp(g_stored_vpn_type, "tailscale") == 0) {
 		bool ts_is_up = false;
 		char ts_ip[20] = {0};
 		
@@ -3808,6 +3821,22 @@ static void config_server_load_cfg(char *cfg)
 	ESP_LOGI(TAG, "device_config.webhook_en: %s", device_config.webhook_en);
 	//*****
 
+
+        // --- HA AUTO DISCOVERY FIELDS ---
+	config_server_load_string(root, "mqtt_discovery_en", device_config.mqtt_discovery_en, sizeof(device_config.mqtt_discovery_en), "disable");
+	config_server_load_string(root, "mqtt_disc_id", device_config.mqtt_disc_id, sizeof(device_config.mqtt_disc_id), "wican_pro_equinox");
+	config_server_load_string(root, "mqtt_disc_path", device_config.mqtt_disc_path, sizeof(device_config.mqtt_disc_path), "homeassistant");
+	config_server_load_string(root, "mqtt_disc_name", device_config.mqtt_disc_name, sizeof(device_config.mqtt_disc_name), "Chevy Equinox EV");
+	config_server_load_string(root, "mqtt_disc_model", device_config.mqtt_disc_model, sizeof(device_config.mqtt_disc_model), "EV");
+	config_server_load_string(root, "mqtt_disc_mfg", device_config.mqtt_disc_mfg, sizeof(device_config.mqtt_disc_mfg), "Chevy");
+	config_server_load_string(root, "mqtt_disc_area", device_config.mqtt_disc_area, sizeof(device_config.mqtt_disc_area), "Garage");
+	
+	config_server_load_string(root, "mqtt_disc_pids_en", device_config.mqtt_disc_pids_en, sizeof(device_config.mqtt_disc_pids_en), "enable");
+	config_server_load_string(root, "mqtt_disc_status_en", device_config.mqtt_disc_status_en, sizeof(device_config.mqtt_disc_status_en), "disable");
+	config_server_load_string(root, "mqtt_disc_status_mode", device_config.mqtt_disc_status_mode, sizeof(device_config.mqtt_disc_status_mode), "periodic");
+	config_server_load_string(root, "mqtt_disc_status_period", device_config.mqtt_disc_status_period, sizeof(device_config.mqtt_disc_status_period), "60");
+	// --------------------------------
+	
 	cJSON_Delete(root);
 	return;
 
@@ -4078,8 +4107,19 @@ static httpd_handle_t config_server_init(void)
 		cert_manager_init();
 			// Initialize VPN manager
 			vpn_manager_init();
-			config_server_load_config_file(true);
 
+                        // --- SAFE NVS READ AT BOOT ---
+			nvs_handle_t vpn_nvs;
+			if (nvs_open("vpn", NVS_READONLY, &vpn_nvs) == ESP_OK) {
+				size_t len = sizeof(g_stored_vpn_type);
+				nvs_get_str(vpn_nvs, "vpn_type", g_stored_vpn_type, &len);
+				nvs_close(vpn_nvs);
+			}
+			// ---
+
+			
+			config_server_load_config_file(true);
+			
 			// Handle mqtt_canfilt.json
 			FILE* f = fopen(FS_MOUNT_POINT"/mqtt_canfilt.json", "r");
 		if (f != NULL)
@@ -4870,4 +4910,23 @@ int8_t config_server_get_mqtt_include_timestamp(void) {
         return 1;
     }
     return 0;
+}
+
+// ======= HA Auto Discovery Getters =======
+char *config_server_get_mqtt_discovery_en(void) { return device_config.mqtt_discovery_en; }
+char *config_server_get_mqtt_disc_id(void) { return device_config.mqtt_disc_id; }
+char *config_server_get_mqtt_disc_path(void) { return device_config.mqtt_disc_path; }
+char *config_server_get_mqtt_disc_name(void) { return device_config.mqtt_disc_name; }
+char *config_server_get_mqtt_disc_model(void) { return device_config.mqtt_disc_model; }
+char *config_server_get_mqtt_disc_mfg(void) { return device_config.mqtt_disc_mfg; }
+char *config_server_get_mqtt_disc_area(void) { return device_config.mqtt_disc_area; }
+
+char *config_server_get_mqtt_disc_pids_en(void) { return device_config.mqtt_disc_pids_en; }
+char *config_server_get_mqtt_disc_status_en(void) { return device_config.mqtt_disc_status_en; }
+char *config_server_get_mqtt_disc_status_mode(void) { return device_config.mqtt_disc_status_mode; }
+char *config_server_get_mqtt_disc_status_period(void) { return device_config.mqtt_disc_status_period; }
+
+const char *config_server_get_mqtt_en(void)
+{
+    return device_config.mqtt_en;
 }
