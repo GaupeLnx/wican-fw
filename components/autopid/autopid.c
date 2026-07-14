@@ -2308,7 +2308,7 @@ static const char* get_ha_device_class(const char* unit) {
 // Forward declaration to let the compiler know this returns a string pointer
 const char *config_server_get_mqtt_en(void);
 
-void autopid_publish_discovery(void)
+static void autopid_publish_discovery_task(void *pvParameters)
 {
     // Ensure MQTT is active before proceeding
     if (strcmp(config_server_get_mqtt_en(), "enable") != 0) {
@@ -2451,6 +2451,15 @@ void autopid_publish_discovery(void)
 
     cJSON_Delete(device_obj);
     ESP_LOGI(TAG, "Auto Discovery Publishing Complete.");
+
+    vTaskDelete(NULL);
+}
+
+
+void autopid_publish_discovery(void)
+{
+    // Spawn an independent task so the MQTT event loop is never blocked
+    xTaskCreate(autopid_publish_discovery_task, "ha_disc", 6144, NULL, 5, NULL);
 }
 
 
