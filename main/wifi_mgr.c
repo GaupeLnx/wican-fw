@@ -84,6 +84,18 @@ static wifi_mgr_status_t wifi_status = {0};
 // Cursor for sequential non-scan attempts across primary and fallbacks
 static int s_select_seq_cursor = -1;
 
+// Deferred work: moves blocking scan/delay operations out of the WiFi
+// event handler (which runs on the shared system event task) and into
+// their own task, so event delivery is never stalled.
+typedef enum {
+    WIFI_DEFERRED_WORK_SCAN_CONNECT,   // run wifi_mgr_scan_select_and_connect()
+    WIFI_DEFERRED_WORK_APSTA_RESTORE,  // 1s settle delay + switch back to APSTA
+} wifi_deferred_work_type_t;
+
+static QueueHandle_t wifi_deferred_work_queue = NULL;
+static TaskHandle_t wifi_deferred_work_task_handle = NULL;
+static void wifi_deferred_work_task(void* pvParameters);
+
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 static void wifi_reconnect_task(void* pvParameters);
 static wifi_country_t country_01 = {.cc = "01", .schan = 1, .nchan = 14, .policy = WIFI_COUNTRY_POLICY_AUTO};
@@ -651,6 +663,26 @@ esp_err_t wifi_mgr_init(wifi_mgr_config_t* config) {
     xQueueOverwrite(sta_ip_queue, default_ip);
     xQueueOverwrite(ap_stations_queue, &default_stations);
 
+    // Create deferred work queue and task
+    wifi_deferred_work_queue = xQueueCreate(4, sizeof(wifi_deferred_work_type_t));
+    if (wifi_deferred_work_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create deferred work queue");
+        if (sta_ip_queue) vQueueDelete(sta_ip_queue);
+        if (ap_stations_queue) vQueueDelete(ap_stations_queue);
+        vEventGroupDelete(wifi_event_group);
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (xTaskCreate(wifi_deferred_work_task, "wifi_defer_work", 4096, NULL, 5, &wifi_deferred_work_task_handle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create deferred work task");
+        vQueueDelete(wifi_deferred_work_queue);
+        wifi_deferred_work_queue = NULL;
+        if (sta_ip_queue) vQueueDelete(sta_ip_queue);
+        if (ap_stations_queue) vQueueDelete(ap_stations_queue);
+        vEventGroupDelete(wifi_event_group);
+        return ESP_ERR_NO_MEM;
+    }
+
     // Initialize network interfaces
     ap_netif = esp_netif_create_default_wifi_ap();
     sta_netif = esp_netif_create_default_wifi_sta();
@@ -798,6 +830,16 @@ esp_err_t wifi_mgr_deinit(void) {
     if (ap_stations_queue != NULL) {
         vQueueDelete(ap_stations_queue);
         ap_stations_queue = NULL;
+    }
+
+    // Clean up deferred work task and queue
+    if (wifi_deferred_work_task_handle != NULL) {
+        vTaskDelete(wifi_deferred_work_task_handle);
+        wifi_deferred_work_task_handle = NULL;
+    }
+    if (wifi_deferred_work_queue != NULL) {
+        vQueueDelete(wifi_deferred_work_queue);
+        wifi_deferred_work_queue = NULL;
     }
     
     // DON'T delete the event group - preserve it for status monitoring
@@ -1476,7 +1518,11 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
                 if (wifi_config.sta_auto_reconnect) {
                     // If fallbacks configured, scan and select; else connect directly
                     if (wifi_config.fallback_count > 0) {
-                        wifi_mgr_scan_select_and_connect();
+                        wifi_deferred_work_type_t work = WIFI_DEFERRED_WORK_SCAN_CONNECT;
+                        if (wifi_deferred_work_queue == NULL || xQueueSend(wifi_deferred_work_queue, &work, 0) != pdTRUE) {
+                            ESP_LOGW(TAG, "Deferred work queue full/unavailable, running scan inline");
+                            wifi_mgr_scan_select_and_connect();
+                        }
                     } else {
                         wifi_mgr_update_last_attempted_from_current_config();
                         apply_sta_ip_config(wifi_config.sta_ip_type, wifi_config.sta_static_ip, wifi_config.sta_netmask, wifi_config.sta_gateway, wifi_config.sta_dns);
@@ -1514,18 +1560,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
                 
                 // Only switch back to APSTA if we're actually in STA mode and not in a mode transition
                 if (wifi_config.mode == WIFI_MGR_MODE_APSTA && wifi_config.ap_auto_disable) {
-                    wifi_mode_t current_mode;
-                    if (esp_wifi_get_mode(&current_mode) == ESP_OK && current_mode == WIFI_MODE_STA) {
-                        // Add a small delay to avoid rapid mode switching
-                        vTaskDelay(pdMS_TO_TICKS(1000));
-                        // Check if we're still disconnected before switching back
-                        if (!wifi_status.sta_connected) {
-                            ESP_LOGI(TAG, "Switching back to APSTA mode");
-                            esp_err_t ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
-                            if (ret != ESP_OK) {
-                                ESP_LOGE(TAG, "Failed to switch back to APSTA mode: %s", esp_err_to_name(ret));
-                            }
-                        }
+                    wifi_deferred_work_type_t work = WIFI_DEFERRED_WORK_APSTA_RESTORE;
+                    if (wifi_deferred_work_queue == NULL || xQueueSend(wifi_deferred_work_queue, &work, 0) != pdTRUE) {
+                        ESP_LOGW(TAG, "Deferred work queue full/unavailable, dropping APSTA restore for this event");
                     }
                 }
                 break;
@@ -1695,6 +1732,44 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         }
     }
 }
+
+
+/**
+ * Deferred work task — performs the blocking scan and the APSTA-restore
+ * delay outside of the WiFi event handler, so the shared system event
+ * task never blocks on them.
+ */
+static void wifi_deferred_work_task(void* pvParameters) {
+    wifi_deferred_work_type_t work;
+
+    while (1) {
+        if (xQueueReceive(wifi_deferred_work_queue, &work, portMAX_DELAY) == pdTRUE) {
+            switch (work) {
+                case WIFI_DEFERRED_WORK_SCAN_CONNECT:
+                    wifi_mgr_scan_select_and_connect();
+                    break;
+
+                case WIFI_DEFERRED_WORK_APSTA_RESTORE: {
+                    wifi_mode_t current_mode;
+                    if (esp_wifi_get_mode(&current_mode) == ESP_OK && current_mode == WIFI_MODE_STA) {
+                        // Small delay to avoid rapid mode switching
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        // Check if we're still disconnected before switching back
+                        if (!wifi_status.sta_connected) {
+                            ESP_LOGI(TAG, "Switching back to APSTA mode");
+                            esp_err_t ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
+                            if (ret != ESP_OK) {
+                                ESP_LOGE(TAG, "Failed to switch back to APSTA mode: %s", esp_err_to_name(ret));
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 
 /**
  * WiFi reconnect task
