@@ -245,7 +245,7 @@ const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\",\"we
 										\"batt_alert_url\":\"mqtt://mqtt.eclipseprojects.io\",\"batt_alert_port\":\"1883\",\"batt_alert_topic\":\"CAR1/voltage\",\"batt_mqtt_user\":\"meatpi\",\
 								\"batt_mqtt_pass\":\"meatpi\",\"batt_alert_time\":\"1\",\"mqtt_en\":\"disable\",\"mqtt_elm327_log\":\"disable\",\"elm327_udp_log\":\"disable\",\"mqtt_url\":\"mqtt://127.0.0.1\",\"mqtt_port\":\"1883\",\
 										\"mqtt_user\":\"meatpi\",\"mqtt_pass\":\"meatpi\",\"mqtt_tx_topic\":\"wican/%s/can/tx\",\"mqtt_rx_topic\":\"wican/%s/can/rx\",\"mqtt_status_topic\":\"wican/%s/can/status\",\"mqtt_security\":\"none\",\"mqtt_cert_set\": \"default\",\"mqtt_skip_cn\":\"disable\",\
-										\"mqtt_discovery_en\":\"disable\",\"mqtt_disc_id\":\"wican_pro_equinox\",\"mqtt_disc_path\":\"homeassistant\",\"mqtt_disc_name\":\"Chevy Equinox EV\",\"mqtt_disc_model\":\"EV\",\"mqtt_disc_mfg\":\"Chevy\",\"mqtt_disc_area\":\"Garage\",\"mqtt_disc_pids_en\":\"enable\",\"mqtt_disc_status_en\":\"disable\",\"mqtt_disc_status_mode\":\"periodic\",\"mqtt_disc_status_period\":\"60\",\
+										\"mqtt_discovery_en\":\"disable\",\"mqtt_disc_id\":\"wican_pro_equinox\",\"mqtt_disc_path\":\"homeassistant\",\"mqtt_disc_name\":\"My Vehicle\",\"mqtt_disc_model\":\"Generic OBD2\",\"mqtt_disc_mfg\":\"Unknown\",\"mqtt_disc_area\":\"Garage\",\"mqtt_disc_pids_en\":\"disable\",\"mqtt_disc_status_en\":\"disable\",\"mqtt_disc_status_mode\":\"periodic\",\"mqtt_disc_status_period\":\"60\",\
 										\"logger_status\":\"disable\",\"log_filesystem\":\"littlefs\",\"log_storage\":\"sdcard\",\"log_period\":\"10\"}";
 
 // const char device_config_default[] = "{\"wifi_mode\":\"AP\",\"ap_ch\":\"6\", \"ap_auto_disable\": \"disable\",\"sta_ssid\":\"MeatPi\",\"sta_pass\":\"TomatoSauce\",\"sta_security\":\"wpa3\",\"can_datarate\":\"500K\",\"can_mode\":\"normal\",\"port_type\":\"tcp\",\"port\":\"35000\",\"ap_pass\":\"@meatpi#\",\"protocol\":\"elm327\",\"ble_pass\":\"123456\",\"ble_status\":\"disable\",\"sleep_status\":\"disable\",\"sleep_volt\":\"13.1\",\"wakeup_volt\":\"13.5\",\"batt_alert\":\"disable\",\"batt_alert_ssid\":\"MeatPi\",\"batt_alert_pass\":\"TomatoSauce\",\"batt_alert_volt\":\"11.0\",\"batt_alert_protocol\":\"mqtt\",\"batt_alert_url\":\"mqtt://mqtt.eclipseprojects.io\",\"batt_alert_port\":\"1883\",\"batt_alert_topic\":\"CAR1/voltage\",\"batt_mqtt_user\":\"meatpi\",\"batt_mqtt_pass\":\"meatpi\",\"batt_alert_time\":\"1\",\"mqtt_en\":\"disable\",\"mqtt_elm327_log\":\"disable\",\"mqtt_url\":\"mqtt://127.0.0.1\",\"mqtt_port\":\"1883\",\"mqtt_user\":\"meatpi\",\"mqtt_pass\":\"meatpi\",\"mqtt_tx_topic\":\"wican/%s/can/tx\",\"mqtt_rx_topic\":\"wican/%s/can/rx\",\"mqtt_status_topic\":\"wican/%s/can/status\"}";
@@ -3826,12 +3826,12 @@ static void config_server_load_cfg(char *cfg)
 	config_server_load_string(root, "mqtt_discovery_en", device_config.mqtt_discovery_en, sizeof(device_config.mqtt_discovery_en), "disable");
 	config_server_load_string(root, "mqtt_disc_id", device_config.mqtt_disc_id, sizeof(device_config.mqtt_disc_id), "wican_pro_equinox");
 	config_server_load_string(root, "mqtt_disc_path", device_config.mqtt_disc_path, sizeof(device_config.mqtt_disc_path), "homeassistant");
-	config_server_load_string(root, "mqtt_disc_name", device_config.mqtt_disc_name, sizeof(device_config.mqtt_disc_name), "Chevy Equinox EV");
-	config_server_load_string(root, "mqtt_disc_model", device_config.mqtt_disc_model, sizeof(device_config.mqtt_disc_model), "EV");
-	config_server_load_string(root, "mqtt_disc_mfg", device_config.mqtt_disc_mfg, sizeof(device_config.mqtt_disc_mfg), "Chevy");
+	config_server_load_string(root, "mqtt_disc_name", device_config.mqtt_disc_name, sizeof(device_config.mqtt_disc_name), "My Vehicle");
+	config_server_load_string(root, "mqtt_disc_model", device_config.mqtt_disc_model, sizeof(device_config.mqtt_disc_model), "Generic ODB2");
+	config_server_load_string(root, "mqtt_disc_mfg", device_config.mqtt_disc_mfg, sizeof(device_config.mqtt_disc_mfg), "model");
 	config_server_load_string(root, "mqtt_disc_area", device_config.mqtt_disc_area, sizeof(device_config.mqtt_disc_area), "Garage");
 	
-	config_server_load_string(root, "mqtt_disc_pids_en", device_config.mqtt_disc_pids_en, sizeof(device_config.mqtt_disc_pids_en), "enable");
+	config_server_load_string(root, "mqtt_disc_pids_en", device_config.mqtt_disc_pids_en, sizeof(device_config.mqtt_disc_pids_en), "disable");
 	config_server_load_string(root, "mqtt_disc_status_en", device_config.mqtt_disc_status_en, sizeof(device_config.mqtt_disc_status_en), "disable");
 	config_server_load_string(root, "mqtt_disc_status_mode", device_config.mqtt_disc_status_mode, sizeof(device_config.mqtt_disc_status_mode), "periodic");
 	config_server_load_string(root, "mqtt_disc_status_period", device_config.mqtt_disc_status_period, sizeof(device_config.mqtt_disc_status_period), "60");
