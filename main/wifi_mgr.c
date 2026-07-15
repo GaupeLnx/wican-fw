@@ -40,6 +40,7 @@
 #include <cJSON.h>
 #include "wifi_mgr.h"
 #include "dev_status.h"
+#include "vpn_manager.h"
 
 static const char *TAG = "WiFi_Manager";
 static esp_netif_t* ap_netif = NULL;
@@ -1614,13 +1615,19 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
                 break;
             }
         }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         
+        // Unconditionally force a VPN socket rebuild whenever an IP lease is acquired!
+        // This guarantees recovery whether switching networks OR reconnecting to the same SSID after a drop.
+        ESP_LOGW(TAG, "Network IP lease acquired! Forcing VPN socket rebuild to prevent stale connections...");
+        vpn_manager_request_reload();
+
         wifi_status.sta_connected = true;
         wifi_status.sta_retry_count = 0;
         snprintf(wifi_status.sta_ip, sizeof(wifi_status.sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
+	
         // Update queue
         if (sta_ip_queue) xQueueOverwrite(sta_ip_queue, wifi_status.sta_ip);
         // Clear failure/bans for the successful SSID
@@ -1824,7 +1831,9 @@ static void wifi_reconnect_task(void* pvParameters) {
                             wifi_scan_config_t target_scan = { 
                                 .ssid = (uint8_t*)wifi_config.sta_home_priority, 
                                 .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-                                .show_hidden = true
+                                .show_hidden = true,
+				.scan_time.active.min = 20,
+                                .scan_time.active.max = 40
                             };
 
                             esp_err_t scan_ret = esp_wifi_scan_start(&target_scan, true);
