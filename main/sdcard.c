@@ -268,6 +268,18 @@ static FILE *sdcard_log_open(void)
     return file;
 }
 
+static void sdcard_log_delete_files(void)
+{
+    if (unlink(SDCARD_LOG_PATH) == 0)
+    {
+        ESP_LOGI(TAG, "Deleted %s (debug log disabled)", SDCARD_LOG_PATH);
+    }
+    if (unlink(SDCARD_LOG_BACKUP_PATH) == 0)
+    {
+        ESP_LOGI(TAG, "Deleted %s (debug log disabled)", SDCARD_LOG_BACKUP_PATH);
+    }
+}
+
 static void sdcard_log_task(void *arg)
 {
     (void)arg;
@@ -744,6 +756,7 @@ esp_err_t sd_card_init(void)
     else
     {
         ESP_LOGI(TAG, "SD debug logging disabled by config, skipping");
+        sdcard_log_delete_files();
     }
     ESP_LOGI(TAG, "SD card mounted successfully");
     
