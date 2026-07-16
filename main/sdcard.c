@@ -745,6 +745,22 @@ esp_err_t sd_card_init(void)
 
     s_card_mounted = true;
     dev_status_set_bits(DEV_SDCARD_MOUNTED_BIT);
+    /* config.json hasn't been loaded yet at this point in boot -- sd_card_init()
+     * runs before config_server_preload_config(), so device_config.sdcard_debug_log_en
+     * isn't populated here and this decision can't be made correctly yet. See
+     * sdcard_apply_debug_log_config(), called later once config is actually loaded. */
+    ESP_LOGI(TAG, "SD card mounted successfully");
+    
+    return ESP_OK;
+}
+
+esp_err_t sdcard_apply_debug_log_config(void)
+{
+    if (!s_card_mounted)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (config_server_get_sdcard_debug_log_en())
     {
         esp_err_t log_ret = sdcard_log_start();
@@ -752,15 +768,14 @@ esp_err_t sd_card_init(void)
         {
             ESP_LOGW(TAG, "SD log capture unavailable: %s", esp_err_to_name(log_ret));
         }
+        return log_ret;
     }
     else
     {
         ESP_LOGI(TAG, "SD debug logging disabled by config, skipping");
         sdcard_log_delete_files();
+        return ESP_OK;
     }
-    ESP_LOGI(TAG, "SD card mounted successfully");
-    
-    return ESP_OK;
 }
 
 esp_err_t sd_card_deinit(void) 
