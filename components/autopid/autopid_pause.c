@@ -25,6 +25,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "imu.h"
+#include "restart_tracker.h"
 #include "sleep_mode.h"
 #include "wc_timer.h"
 
@@ -81,6 +82,24 @@ static bool pid_override_mode(const autopid_config_t *config)
 bool autopid_pause_is_boot_pid_polling_keep_alive_active(const autopid_config_t *config)
 {
     if (!config || config->boot_pid_polling_keep_alive_seconds == 0)
+    {
+        return false;
+    }
+
+    /* A wake from sleep is implemented as a full software reboot
+     * (see sleep_mode.c, RESTART_TRACKER_PLANNED_REASON_POWER_WAKE),
+     * which resets the uptime timer. Without this guard the boot
+     * keep-alive window re-opens on every wake, so with the battery
+     * near the sleep threshold the polling load can pull the voltage
+     * back under it, causing a poll -> sag -> sleep -> wake -> poll
+     * oscillation. Skip the boot window for wake-from-sleep reboots;
+     * the voltage-rise and motion triggers remain the intended resume
+     * paths after sleep. If the tracker has no valid record, fall
+     * through to the existing behavior. */
+    restart_tracker_record_t latest_record;
+    if (restart_tracker_get_latest_record(&latest_record) == ESP_OK &&
+        latest_record.was_planned &&
+        latest_record.planned_reason == RESTART_TRACKER_PLANNED_REASON_POWER_WAKE)
     {
         return false;
     }
