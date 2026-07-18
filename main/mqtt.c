@@ -86,6 +86,7 @@ static esp_mqtt_client_handle_t client = NULL;
 static char *device_id;
 static char *mqtt_sub_topic;
 static char *mqtt_status_topic;
+static char *mqtt_availability_topic;
 static char *mqtt_cmd_topic;
 static char *mqtt_rsp_topic;
 static char *mqtt_battery_topic;
@@ -141,7 +142,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 			
             esp_mqtt_client_subscribe(client, mqtt_cmd_topic, 0);
 			gpio_set_level(mqtt_led, 0);
-			esp_mqtt_client_publish(client, mqtt_status_topic, "{\"status\": \"online\"}", 0, 0, 1);
+			esp_mqtt_client_publish(client, mqtt_availability_topic, "online", 0, 0, 1);
 
             static float vbatt = 0;
             if (sleep_mode_get_voltage(&vbatt) == ESP_OK) 
@@ -718,6 +719,7 @@ void mqtt_init(char* id, uint8_t connected_led, QueueHandle_t *xtx_queue)
     device_id = id;
 
     mqtt_sub_topic = heap_caps_malloc(128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    mqtt_availability_topic = heap_caps_malloc(128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     mqtt_status_topic = heap_caps_malloc(128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     mqtt_cmd_topic = heap_caps_malloc(128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     mqtt_rsp_topic = heap_caps_malloc(128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -725,7 +727,7 @@ void mqtt_init(char* id, uint8_t connected_led, QueueHandle_t *xtx_queue)
     
     // Check if allocation was successful
     if (!mqtt_sub_topic || !mqtt_status_topic || !mqtt_cmd_topic || 
-        !mqtt_rsp_topic || !mqtt_battery_topic) {
+        !mqtt_rsp_topic || !mqtt_battery_topic || !mqtt_availability_topic) {
         ESP_LOGE(TAG, "Failed to allocate MQTT topic buffers in PSRAM");
         return;
     }
@@ -733,6 +735,7 @@ void mqtt_init(char* id, uint8_t connected_led, QueueHandle_t *xtx_queue)
     // Initialize buffers to empty strings
     mqtt_sub_topic[0] = '\0';
     mqtt_status_topic[0] = '\0';
+    mqtt_availability_topic[0] = '\0';
     mqtt_cmd_topic[0] = '\0';
     mqtt_rsp_topic[0] = '\0';
     mqtt_battery_topic[0] = '\0';
@@ -740,6 +743,7 @@ void mqtt_init(char* id, uint8_t connected_led, QueueHandle_t *xtx_queue)
     // Initialize topic strings BEFORE using them in MQTT config
     strcpy(mqtt_sub_topic, config_server_get_mqtt_tx_topic());
     strcpy(mqtt_status_topic, config_server_get_mqtt_status_topic());
+    snprintf(mqtt_availability_topic, 128, "%s/availability", mqtt_status_topic);
     esp_mqtt_client_config_t mqtt_cfg;
 
     memset(&mqtt_cfg, 0, sizeof(mqtt_cfg));
@@ -755,9 +759,9 @@ void mqtt_init(char* id, uint8_t connected_led, QueueHandle_t *xtx_queue)
     mqtt_cfg.network.reconnect_timeout_ms = 5000;
 
     mqtt_cfg.session.keepalive = 30;
-    mqtt_cfg.session.last_will.topic = mqtt_status_topic;
+    mqtt_cfg.session.last_will.topic = mqtt_availability_topic;
     mqtt_cfg.session.last_will.retain = 1;
-    mqtt_cfg.session.last_will.msg = "{\"status\": \"offline\"}";
+    mqtt_cfg.session.last_will.msg = "offline";
 
     mqtt_cfg.buffer.size = MQTT_TX_RX_BUF_SIZE;
     mqtt_cfg.buffer.out_size = MQTT_OUT_BUF_SIZE;

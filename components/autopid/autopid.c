@@ -2406,7 +2406,8 @@ static void autopid_publish_discovery_task(void *pvParameters)
         if (dev_class && strlen(dev_class) > 0) cJSON_AddStringToObject(payload, "device_class", dev_class); \
         if (unit && strlen(unit) > 0) { \
             cJSON_AddStringToObject(payload, "unit_of_measurement", unit); \
-            cJSON_AddStringToObject(payload, "state_class", "measurement"); /* Enables HA Graphing! */ \
+            cJSON_AddStringToObject(payload, "state_class", "measurement"); \
+	    cJSON_AddNumberToObject(payload, "suggested_display_precision", 1); \
         } \
         \
         char safe_name[64]; \
@@ -2421,11 +2422,11 @@ static void autopid_publish_discovery_task(void *pvParameters)
         if (json_str) { \
             char topic[256]; \
             snprintf(topic, sizeof(topic), "%s/sensor/%s/%s/config", base_path, disc_id, safe_name); \
-            mqtt_publish(topic, json_str, strlen(json_str), 0, 1); /* 1 = Retain */ \
+            mqtt_publish(topic, json_str, strlen(json_str), 0, 1); \
             free(json_str); \
         } \
         cJSON_Delete(payload); \
-        vTaskDelay(pdMS_TO_TICKS(50)); /* Prevent flooding the broker */ \
+        vTaskDelay(pdMS_TO_TICKS(50)); \
     } while(0)
 
     // 2. Publish WiCAN Status Fields (if enabled)
@@ -2496,8 +2497,8 @@ static void autopid_publish_discovery_task(void *pvParameters)
                                 // STRICTLY ONLY DISCOVER DEFAULT DESTINATIONS
                                 if (param->destination_type != DEST_DEFAULT) continue;
 
-                                char val_template[128];
-                                snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] }}", param->name);
+                                  char val_template[256];
+                                  snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] if '%s' in value_json else this.state }}", param->name, param->name);
 
                                 const char *target_topic = config_server_get_mqtt_rx_topic();
 
@@ -2540,8 +2541,8 @@ static void autopid_publish_discovery_task(void *pvParameters)
                             // STRICTLY ONLY DISCOVER DEFAULT DESTINATIONS
                             if (param->destination_type != DEST_DEFAULT) continue;
 
-                            char val_template[128];
-                            snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] }}", param->name);
+                            char val_template[256];
+                            snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] if '%s' in value_json else this.state }}", param->name, param->name);
 
                             const char *target_topic = config_server_get_mqtt_rx_topic();
 
