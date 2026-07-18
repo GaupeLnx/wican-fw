@@ -914,6 +914,8 @@ static void autopid_data_update(autopid_config_t *pids)
                             parameter_t *param = &curr_pid->parameters[j];
                             if (!param->enabled) continue;
 
+			    if (param->failed) continue;
+
                             // ---> SKIP NON-DEFAULT DESTINATIONS <---
                             if (param->destination_type != DEST_DEFAULT) continue;
 
@@ -958,6 +960,9 @@ static void autopid_data_update(autopid_config_t *pids)
                     for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
                         parameter_t *param = &curr_pid->parameters[j];
                         if (!param->enabled) continue;
+
+			// ---> ADD THIS: STRIP FAILED PIDS <---
+                        if (param->failed) continue;
 
                         // ---> SKIP NON-DEFAULT DESTINATIONS <---
                         if (param->destination_type != DEST_DEFAULT) continue;
@@ -1502,20 +1507,22 @@ void autopid_publish_all_destinations(bool is_event_trigger)
 
     char *debug_json = NULL;
 
-    // Current time not directly needed with wc_timer; timers store absolute expiry in us
+    // --- FIXED: RESTORE BULK PUBLISHING FOR STANDARD MQTT USERS ---
+    // Always attempt to publish the default payload if triggered by an event,
+    // completely independent of the advanced destinations loop below.
+    if (is_event_trigger) {
+        bool can_publish = (config_server_mqtt_en_config() == 1) && (mqtt_connected() != 0);
+        if (can_publish && raw_json) {
+            mqtt_publish(config_server_get_mqtt_rx_topic(), raw_json, 0, 0, 1);
+        }
+    }
 
-    // Legacy single destination path if no multi-destinations parsed
-    // if(autopid_config->destinations_count == 0){
-    //     if(autopid_config->group_destination_type == DEST_MQTT_TOPIC){
-    //         if(autopid_config->group_destination && strlen(autopid_config->group_destination)>0){
-    //             mqtt_publish(autopid_config->group_destination, raw_json, 0, 0, 1);
-    //         }else{
-    //             mqtt_publish(config_server_get_mqtt_rx_topic(), raw_json, 0, 0, 1);
-    //         }
-    //     }
-    //     free(raw_json);
-    //     return;
-    // }
+    // If there are no advanced destinations to process, clean up and exit.
+    if (autopid_config->destinations_count == 0) {
+        if (raw_json) free(raw_json);
+        if (debug_json) free(debug_json);
+        return;
+    }
 
     for (uint32_t i = 0; i < autopid_config->destinations_count; i++)
     {
@@ -2291,17 +2298,61 @@ static void sanitize_for_id(char *dest, const char *src, size_t max_len) {
 static const char* get_ha_device_class(const char* unit) {
     if (!unit || strlen(unit) == 0) return "";
     
-    if (strcasecmp(unit, "V") == 0) return "voltage";
-    if (strcasecmp(unit, "A") == 0) return "current";
-    if (strcmp(unit, "°C") == 0 || strcmp(unit, "C") == 0) return "temperature";
-    if (strcmp(unit, "°F") == 0 || strcmp(unit, "F") == 0) return "temperature";
-    if (strcasecmp(unit, "kPa") == 0 || strcasecmp(unit, "psi") == 0 || strcasecmp(unit, "bar") == 0) return "pressure";
-    if (strcasecmp(unit, "km/h") == 0 || strcasecmp(unit, "mph") == 0) return "speed";
-    if (strcasecmp(unit, "kW") == 0 || strcasecmp(unit, "W") == 0) return "power";
-    if (strcasecmp(unit, "kWh") == 0 || strcasecmp(unit, "Wh") == 0) return "energy";
-    if (strcasecmp(unit, "km") == 0 || strcasecmp(unit, "mi") == 0) return "distance";
+    // Voltage
+    if (strcmp(unit, "V") == 0 || strcmp(unit, "mV") == 0) return "voltage";
     
-    // Fallback: HA handles %, rpm, and generic numbers perfectly without a specific device class
+    // Current
+    if (strcmp(unit, "A") == 0 || strcmp(unit, "mA") == 0) return "current";
+    
+    // Temperature
+    if (strcmp(unit, "°C") == 0 || strcmp(unit, "C") == 0 || 
+        strcmp(unit, "°F") == 0 || strcmp(unit, "F") == 0 || 
+        strcmp(unit, "K") == 0) return "temperature";
+    
+    // Pressure
+    if (strcasecmp(unit, "kPa") == 0 || strcasecmp(unit, "psi") == 0 || 
+        strcasecmp(unit, "bar") == 0 || strcasecmp(unit, "mbar") == 0 || 
+        strcasecmp(unit, "Pa") == 0 || strcasecmp(unit, "hPa") == 0 || 
+        strcasecmp(unit, "inHg") == 0 || strcasecmp(unit, "mmHg") == 0) return "pressure";
+    
+    // Speed
+    if (strcasecmp(unit, "km/h") == 0 || strcasecmp(unit, "mph") == 0 || 
+        strcasecmp(unit, "m/s") == 0 || strcasecmp(unit, "knots") == 0) return "speed";
+    
+    // Power
+    if (strcmp(unit, "kW") == 0 || strcmp(unit, "W") == 0) return "power";
+    
+    // Energy
+    if (strcmp(unit, "kWh") == 0 || strcmp(unit, "Wh") == 0) return "energy";
+    
+    // Distance
+    if (strcmp(unit, "km") == 0 || strcmp(unit, "mi") == 0 || 
+        strcmp(unit, "m") == 0 || strcmp(unit, "cm") == 0 || 
+        strcmp(unit, "mm") == 0 || strcmp(unit, "ft") == 0 || 
+        strcmp(unit, "in") == 0 || strcmp(unit, "yd") == 0) return "distance";
+
+    // Volume
+    if (strcmp(unit, "L") == 0 || strcmp(unit, "mL") == 0 || 
+        strcasecmp(unit, "gal") == 0) return "volume";
+
+    // Weight / Mass
+    if (strcmp(unit, "kg") == 0 || strcmp(unit, "g") == 0 || 
+        strcmp(unit, "mg") == 0 || strcmp(unit, "lb") == 0 || 
+        strcmp(unit, "lbs") == 0 || strcmp(unit, "oz") == 0) return "weight";
+
+    // Duration / Time
+    if (strcmp(unit, "d") == 0 || strcmp(unit, "h") == 0 || 
+        strcmp(unit, "hr") == 0 || strcmp(unit, "min") == 0 || 
+        strcmp(unit, "s") == 0 || strcmp(unit, "ms") == 0) return "duration";
+
+    // Frequency
+    if (strcasecmp(unit, "Hz") == 0 || strcasecmp(unit, "kHz") == 0 || 
+        strcasecmp(unit, "MHz") == 0) return "frequency";
+    
+    // Fallback: HA handles generic numbers perfectly without a specific device class.
+    // NOTE: We intentionally leave "%" blank because it could represent Battery (SoC), 
+    // Engine Load, Throttle Position, or Fuel Level. Users must manually set "battery"
+    // in the class field if they want the HA battery icon!
     return ""; 
 }
 
@@ -2315,6 +2366,16 @@ static void autopid_publish_discovery_task(void *pvParameters)
         return;
     }
 
+    // --- NEW: THE GATEKEEPER ---
+    // Stall this task indefinitely until the underlying MQTT client 
+    // (and the VPN tunnel it relies on) actually successfully connects to the broker.
+    ESP_LOGI(TAG, "Auto Discovery waiting for MQTT/VPN connection...");
+    while (mqtt_connected() == 0) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    ESP_LOGI(TAG, "MQTT Connected! Publishing Auto Discovery payloads...");
+    // ---------------------------
+    
     // --- Pull Custom Settings from Web GUI ---
     const char *base_path = config_server_get_mqtt_disc_path();
     const char *disc_id   = config_server_get_mqtt_disc_id();
@@ -2400,9 +2461,9 @@ static void autopid_publish_discovery_task(void *pvParameters)
         
         // --- Sleep & Wakeup Settings ---
         PUBLISH_HA_SENSOR("Sleep Status", status_topic, "{{ value_json.sleep_status }}", "", "");
-        PUBLISH_HA_SENSOR("Sleep Voltage", status_topic, "{{ value_json.sleep_volt }}", "V", "voltage");
+        PUBLISH_HA_SENSOR("Sleep Voltage", status_topic, "{{ value_json.sleep_volt | float | round(1) }}", "V", "voltage");
         PUBLISH_HA_SENSOR("Sleep Time", status_topic, "{{ value_json.sleep_time }}", "min", "");
-        PUBLISH_HA_SENSOR("Wakeup Voltage", status_topic, "{{ value_json.wakeup_volt }}", "V", "voltage");
+        PUBLISH_HA_SENSOR("Wakeup Voltage", status_topic, "{{ value_json.wakeup_volt | float | round(1) }}", "V", "voltage");
         PUBLISH_HA_SENSOR("Wakeup Mode", status_topic, "{{ value_json.wakeup_mode }}", "", "");
         PUBLISH_HA_SENSOR("Wakeup Interval", status_topic, "{{ value_json.wakeup_interval }}", "min", "");
         
@@ -2411,38 +2472,87 @@ static void autopid_publish_discovery_task(void *pvParameters)
         PUBLISH_HA_SENSOR("OBD Chip Status", status_topic, "{{ value_json.obd_chip_status }}", "", "");
         PUBLISH_HA_SENSOR("VPN Status", status_topic, "{{ value_json.vpn_status }}", "", "");
         PUBLISH_HA_SENSOR("Time Synced", status_topic, "{{ value_json.time_synced }}", "", "");
+	PUBLISH_HA_SENSOR("VPN IP", status_topic, "{{ value_json.vpn_ip }}", "", "");
     }
 
     // 3. Publish OBD2/CAN PIDs (if enabled)
     if (strcmp(config_server_get_mqtt_disc_pids_en(), "enable") == 0) {
         if (autopid_lock(1000)) {
-            // Iterate through the loaded PIDs and build a sensor for each
-            if (autopid_config && autopid_config->pid_count > 0) {
-                for (uint32_t i = 0; i < autopid_config->pid_count; i++) {
-                    pid_data_t *curr_pid = &autopid_config->pids[i];
-                    if (!curr_pid->enabled) continue;
-		    
-                      for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
-                        parameter_t *param = &curr_pid->parameters[j];
-                        if (!param->enabled) continue;
+            if (autopid_config) {
+                // --- A. Process Grouped PIDs ---
+                if (autopid_config->use_groups) {
+                    for (uint32_t g = 0; g < autopid_config->group_count; g++) {
+                        pid_group_t *grp = &autopid_config->groups[g];
+                        if (!grp->enabled) continue;
                         
-                        // We are routing DEST_DEFAULT through HA Discovery
-                        if (param->destination_type != DEST_DEFAULT) continue;
+                        for (uint32_t i = 0; i < grp->pid_count; i++) {
+                            pid_data_t *curr_pid = grp->pids[i];
+                            if (!curr_pid || !curr_pid->enabled) continue;
+                            
+                            for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                                parameter_t *param = &curr_pid->parameters[j];
+                                if (!param->enabled) continue;
 
-                        char val_template[128];
-                        snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] }}", param->name);
+                                // STRICTLY ONLY DISCOVER DEFAULT DESTINATIONS
+                                if (param->destination_type != DEST_DEFAULT) continue;
 
-                        // Route DEST_DEFAULT to the global RX Topic
-                        const char *target_topic = config_server_get_mqtt_rx_topic();
+                                char val_template[128];
+                                snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] }}", param->name);
 
-                        // Map the device class (Prioritize user-defined class if it exists, otherwise auto-map)
-                        const char *final_class = (param->class && strlen(param->class) > 0) 
-                            ? param->class 
-                            : get_ha_device_class(param->unit);
+                                const char *target_topic = config_server_get_mqtt_rx_topic();
 
-                        PUBLISH_HA_SENSOR(param->name, target_topic, val_template, param->unit, final_class);
+                                // Apply User Class OR fallback to Auto-Mapping
+                                const char *final_class = (param->class && strlen(param->class) > 0 && strcmp(param->class, "none") != 0) 
+                                    ? param->class 
+                                    : get_ha_device_class(param->unit);
+
+                                PUBLISH_HA_SENSOR(param->name, target_topic, val_template, param->unit, final_class);
+                            }
+                        }
                     }
-		   
+                }
+
+                // --- B. Process Flat List PIDs ---
+                if (autopid_config->pid_count > 0) {
+                    for (uint32_t i = 0; i < autopid_config->pid_count; i++) {
+                        pid_data_t *curr_pid = &autopid_config->pids[i];
+
+                        // Skip if it's already handled by a group above
+                        bool is_in_group = false;
+                        if (autopid_config->use_groups) {
+                            for (uint32_t g = 0; g < autopid_config->group_count; g++) {
+                                for (uint32_t gp = 0; gp < autopid_config->groups[g].pid_count; gp++) {
+                                    if (autopid_config->groups[g].pids[gp] == curr_pid) {
+                                        is_in_group = true; break;
+                                    }
+                                }
+                                if (is_in_group) break;
+                            }
+                        }
+                        if (is_in_group) continue;
+
+                        if (!curr_pid->enabled) continue;
+                        
+                        for (uint32_t j = 0; j < curr_pid->parameters_count; j++) {
+                            parameter_t *param = &curr_pid->parameters[j];
+                            if (!param->enabled) continue;
+                            
+                            // STRICTLY ONLY DISCOVER DEFAULT DESTINATIONS
+                            if (param->destination_type != DEST_DEFAULT) continue;
+
+                            char val_template[128];
+                            snprintf(val_template, sizeof(val_template), "{{ value_json['%s'] }}", param->name);
+
+                            const char *target_topic = config_server_get_mqtt_rx_topic();
+
+                            // Apply User Class OR fallback to Auto-Mapping
+                            const char *final_class = (param->class && strlen(param->class) > 0) 
+                                ? param->class 
+                                : get_ha_device_class(param->unit);
+
+                            PUBLISH_HA_SENSOR(param->name, target_topic, val_template, param->unit, final_class);
+                        }
+                    }
                 }
             }
             autopid_unlock();
@@ -4003,6 +4113,12 @@ static void publish_parameter_mqtt(parameter_t *param)
         return;
     }
 
+    // ---> BYPASS FOR BULK DEFAULT <---
+    // If JSON Data Grouping is enabled, default parameters are sent in one giant payload!
+    if (param->destination_type == DEST_DEFAULT && autopid_config && autopid_config->grouping && strcmp("enable", autopid_config->grouping) == 0) {
+        return;
+    }
+
     // Filter: If "onchange" is set, only proceed if value changed
     if (param->onchange)
     {
@@ -4031,6 +4147,7 @@ static void publish_parameter_mqtt(parameter_t *param)
     
     switch (param->destination_type)
     {
+     case DEST_DEFAULT:
      case DEST_MQTT_GRP:
      case DEST_MQTT_TOPIC:
         // JSON format
