@@ -2,7 +2,7 @@ name: Deploy Docus Site
 on:
   push:
     branches:
-      - wican-pro # Explicitly target your new branch
+      - wican-pro 
 
 permissions:
   contents: read
@@ -22,13 +22,12 @@ jobs:
           node-version: 24
 
       - name: Install & Build
-        working-directory: ./docs # Step into your docs folder
+        working-directory: ./docs 
         run: |
           npm install --legacy-peer-deps
-          npm install --save-dev @nuxt/vite-builder vite --legacy-peer-depsi
-          # This automatically approves the blocked installation scripts
-          npm approve-scripts --allow-scripts-pending
-          # This forces esbuild and vue-demi to download their required binaries
+          # Approve every package with unreviewed install scripts in one go
+          npm approve-scripts --all
+          # Force esbuild and vue-demi to download their required binaries
           npm rebuild
           echo "export const PinceauTheme = {};" >> node_modules/pinceau/dist/index.mjs
           echo "export const PropertyValue = {};" >> node_modules/pinceau/dist/index.mjs
@@ -37,7 +36,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # This tells GitHub: "Take the files from THIS folder and make them the website"
           path: docs/.output/public 
 
   deploy:
