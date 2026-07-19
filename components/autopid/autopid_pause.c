@@ -86,6 +86,10 @@ bool autopid_pause_is_boot_pid_polling_keep_alive_active(const autopid_config_t 
         return false;
     }
 
+    int64_t uptime_us = esp_timer_get_time();
+    int64_t keep_alive_us = (int64_t)config->boot_pid_polling_keep_alive_seconds * 1000000LL;
+    bool within_boot_threshold = uptime_us < keep_alive_us;
+
     /* A wake from sleep is implemented as a full software reboot
      * (see sleep_mode.c, RESTART_TRACKER_PLANNED_REASON_POWER_WAKE),
      * which resets the uptime timer. Without this guard the boot
@@ -95,18 +99,20 @@ bool autopid_pause_is_boot_pid_polling_keep_alive_active(const autopid_config_t 
      * oscillation. Skip the boot window for wake-from-sleep reboots;
      * the voltage-rise and motion triggers remain the intended resume
      * paths after sleep. If the tracker has no valid record, fall
-     * through to the existing behavior. */
-    restart_tracker_record_t latest_record;
-    if (restart_tracker_get_latest_record(&latest_record) == ESP_OK &&
-        latest_record.was_planned &&
-        latest_record.planned_reason == RESTART_TRACKER_PLANNED_REASON_POWER_WAKE)
+     * through to the existing behavior. Only checked when we're still
+     * inside the boot window, to avoid the extra call once it's expired. */
+    if (within_boot_threshold)
     {
-        return false;
+        restart_tracker_record_t latest_record;
+        if (restart_tracker_get_latest_record(&latest_record) == ESP_OK &&
+            latest_record.was_planned &&
+            latest_record.planned_reason == RESTART_TRACKER_PLANNED_REASON_POWER_WAKE)
+        {
+            return false;
+        }
     }
 
-    int64_t uptime_us = esp_timer_get_time();
-    int64_t keep_alive_us = (int64_t)config->boot_pid_polling_keep_alive_seconds * 1000000LL;
-    return uptime_us < keep_alive_us;
+    return within_boot_threshold;
 }
 
 static uint32_t voltage_rise_time_seconds_or_default(uint32_t rise_time_seconds)
