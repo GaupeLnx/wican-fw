@@ -1072,6 +1072,27 @@
                         </td>
                     </tr>
                 </table>
+   <div class="divider"></div>
+                <table class="form-table">
+                    <tr>
+                        <td>SD Debug Log:</td>
+                        <td>
+                            <select name="sdcard_debug_log_en" id="sdcard_debug_log_en" onchange="submit_enable()">
+                                <option value="enable" selected="selected">Enable</option>
+                                <option value="disable">Disable</option>
+                            </select>
+                            <div style="font-size:.75rem;color:#6b7280;margin-top:4px">
+                                Writes device debug output to /sdcard/wican.log. Requires a reboot to take effect. Rotates at 1MB (keeps one backup, wican.log.1).
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Download Debug Log:</td>
+                        <td>
+                            <input id="download_debug_log_button" name="download_debug_log_button" type="button" onclick="downloadDebugLog()" value="Download" class="system-button">
+                        </td>
+                    </tr>
+                </table>             
             </div>
 
             <div class="divider"></div>
