@@ -1646,7 +1646,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
 
             if (!url)
             {
-                ESP_LOGW(TAG, "Destination %u missing URL", i);
+                ESP_LOGW(TAG, "Destination %lu missing URL", i);
                 gd->fail_count++;
                 break;
             }
@@ -1896,7 +1896,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             bool ok = (err == ESP_OK && resp.is_success);
             if (ok)
             {
-                ESP_LOGI(TAG, "HTTP(S) dest %u status %d success", i, resp.status_code);
+                ESP_LOGI(TAG, "HTTP(S) dest %lu status %d success", i, resp.status_code);
                 gd->consec_failures = 0;
                 gd->backoff_ms = 0;
                 // After initial successful settings push for this destination, switch to telemetry-only
@@ -1905,7 +1905,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             }
             else
             {
-                ESP_LOGE(TAG, "HTTP(S) dest %u request failed: %s", i, esp_err_to_name(err));
+                ESP_LOGE(TAG, "HTTP(S) dest %lu request failed: %s", i, esp_err_to_name(err));
                 gd->consec_failures++;
                 gd->fail_count++;
                 // Apply backoff logic (same as ABRP)
@@ -1943,7 +1943,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             char *url = dest[0] ? strdup_psram(dest) : NULL;
             if (!url)
             {
-                ESP_LOGW(TAG, "Destination %u missing URL", i);
+                ESP_LOGW(TAG, "Destination %lu missing URL", i);
                 gd->fail_count++;
                 break;
             }
@@ -1954,7 +1954,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             {
                 if (!gd->api_token || gd->api_token[0] == '\0')
                 {
-                    ESP_LOGW(TAG, "ABRP destination %u missing user token (api_token)", i);
+                    ESP_LOGW(TAG, "ABRP destination %lu missing user token (api_token)", i);
                     free(url);
                     gd->fail_count++;
                     break;
@@ -2026,7 +2026,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             gmtime_r(&_now, &_utc);
             char _tbuf[32];
             strftime(_tbuf, sizeof(_tbuf), "%Y-%m-%dT%H:%M:%SZ", &_utc);
-            ESP_LOGI(TAG, "HTTP(S) dest %u URL: %s (epoch=%ld utc=%s)", i, url, (long)_now, _tbuf);
+            ESP_LOGI(TAG, "HTTP(S) dest %lu URL: %s (epoch=%ld utc=%s)", i, url, (long)_now, _tbuf);
             // ABRP requests can involve ARP/DNS/route setup on first send; use a slightly larger timeout.
             cfg.timeout_ms = 5000;
             // ABRP API is always HTTPS - configure certificates appropriately
@@ -2124,7 +2124,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
                 // Helpful warning if no api_key configured anywhere
                 if (!auth.api_key && (!strstr(url, "api_key=") && !strstr(url, "apiKey=") && !strstr(url, "apikey=")))
                 {
-                    ESP_LOGW(TAG, "ABRP destination %u has no api_key auth configured (expected query api_key=... or Authorization: APIKEY ...)", i);
+                    ESP_LOGW(TAG, "ABRP destination %lu has no api_key auth configured (expected query api_key=... or Authorization: APIKEY ...)", i);
                 }
             }
 
@@ -2167,7 +2167,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             bool ok = false;
             if (err == ESP_OK)
             {
-                ESP_LOGI(TAG, "HTTP(S) dest %u status %d success=%d", i, resp.status_code, resp.is_success);
+                ESP_LOGI(TAG, "HTTP(S) dest %lu status %d success=%d", i, resp.status_code, resp.is_success);
                 if (gd->type == DEST_ABRP_API)
                 {
                     // ABRP sometimes returns HTTP 200 even on logical errors.
@@ -2204,7 +2204,7 @@ void autopid_publish_all_destinations(bool is_event_trigger)
             }
             else
             {
-                ESP_LOGE(TAG, "HTTP(S) dest %u request failed: %s", i, esp_err_to_name(err));
+                ESP_LOGE(TAG, "HTTP(S) dest %lu request failed: %s", i, esp_err_to_name(err));
                 ok = false;
             }
 

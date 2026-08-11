@@ -146,13 +146,13 @@ static void sync_sys_time(void *pvParameters)
             }
         }
         retry_count++;
-        ESP_LOGW(TAG, "Time sync attempt %u/%u failed, retrying...", retry_count, MAX_RETRIES);
+        ESP_LOGW(TAG, "Time sync attempt %lu/%lu failed, retrying...", retry_count, MAX_RETRIES);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
     if (retry_count >= MAX_RETRIES)
     {
-        ESP_LOGE(TAG, "Failed to synchronize time after %u attempts", MAX_RETRIES);
+        ESP_LOGE(TAG, "Failed to synchronize time after %lu attempts", MAX_RETRIES);
     }
 
     // Periodic re-sync every hour to maintain accuracy

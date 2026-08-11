@@ -22,6 +22,7 @@
 #include "esp_partition.h"
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
+#include <string.h>
 #include <stdio.h>
 
 static const char *DEV_STATUS_TAG = "DEV_STATUS";

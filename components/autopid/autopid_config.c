@@ -1128,6 +1128,6 @@ autopid_config_t *load_autopid_config(void)
     if (root_auto) cJSON_Delete(root_auto);
     if (root_car) cJSON_Delete(root_car);
     
-    ESP_LOGI(TAG, "Config Loaded. Groups: %d, PIDs: %ld", cfg->group_count, cfg->pid_count);
+    ESP_LOGI(TAG, "Config Loaded. Groups: %lu, PIDs: %ld", cfg->group_count, cfg->pid_count);
     return cfg;
 }
